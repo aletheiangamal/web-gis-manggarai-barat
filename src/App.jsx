@@ -6,6 +6,7 @@ import {
   TileLayer,
   GeoJSON,
   Marker,
+  Popup,
   Tooltip,
   ScaleControl
 } from 'react-leaflet';
@@ -115,7 +116,7 @@ const maskGeoJSON = difference({
   features: [outerArea, manggaraiBaratBoundary]
 });
 
-const managedLayers = [
+const bidangMenus = [
   { id: 'dayasos', name: 'Bidang Dayasos', color: '#58c4a5' },
   { id: 'rehsos', name: 'Bidang Rehsos', color: '#72a7ff' },
   { id: 'uptd-ppa', name: 'UPTD PPA', color: '#f08c9b' },
@@ -124,21 +125,165 @@ const managedLayers = [
   { id: 'pskb', name: 'Bidang PSKB', color: '#70c8d8' }
 ];
 
+const statisticIcons = [MapPin, Layers, Map];
+const dayasosCategories = ['LKS', 'TKSK', 'KAT', 'LK3', 'TMP'];
+
 function normalizeIdentifier(value) {
   return String(value).toLowerCase().replace(/[^a-z0-9]/g, '');
 }
 
+function getLocationDetails(location) {
+  return location.detail_informasi &&
+    typeof location.detail_informasi === 'object' &&
+    !Array.isArray(location.detail_informasi)
+    ? location.detail_informasi
+    : {};
+}
+
+function getLocationDetail(location, ...keys) {
+  const normalizedKeys = new Set(keys.map(normalizeIdentifier));
+  const entry = Object.entries(getLocationDetails(location)).find(
+    ([detailKey]) => normalizedKeys.has(normalizeIdentifier(detailKey))
+  );
+  return String(entry?.[1] ?? '').trim() || '—';
+}
+
+function getLocationField(location, fieldName, ...aliases) {
+  const value = location[fieldName];
+  if (value !== undefined && value !== null && String(value).trim()) {
+    return String(value).trim();
+  }
+  return getLocationDetail(location, fieldName, ...aliases);
+}
+
+function getLocationStatus(location) {
+  const statusFields = new Set([
+    'status',
+    'statuspenanganan',
+    'statuspenanganankasus',
+    'statustangani',
+    'statuskasus',
+    'tahappenanganan',
+    'penanganan'
+  ]);
+  const statusEntry = Object.entries(getLocationDetails(location)).find(
+    ([key, value]) => statusFields.has(normalizeIdentifier(key)) && String(value).trim()
+  );
+  const normalizedStatus = normalizeIdentifier(statusEntry?.[1] ?? '');
+
+  if (normalizedStatus.startsWith('belum')) {
+    return 'Belum ditangani';
+  }
+  if (
+    normalizedStatus.startsWith('sedang') ||
+    normalizedStatus === 'diproses' ||
+    normalizedStatus === 'proses'
+  ) {
+    return 'Sedang ditangani';
+  }
+  if (
+    normalizedStatus.startsWith('sudah') ||
+    normalizedStatus === 'selesai' ||
+    normalizedStatus === 'ditangani'
+  ) {
+    return 'Sudah ditangani';
+  }
+
+  return 'Status tidak tersedia';
+}
+
+function getLocationCategories(location, menuId) {
+  const details = getLocationDetails(location);
+  const jenisKategori = String(location.jenis_kategori ?? '').trim();
+
+  if (menuId === 'dayasos') {
+    const categoryText = jenisKategori || String(location.kategori ?? '').trim();
+    const normalizedCategory = normalizeIdentifier(categoryText);
+    if (normalizedCategory.includes('tksk')) {
+      return ['TKSK'];
+    }
+    if (normalizedCategory.includes('lk3')) {
+      return ['LK3'];
+    }
+    if (normalizedCategory.includes('tmp')) {
+      return ['TMP'];
+    }
+    if (
+      normalizedCategory.includes('lks') ||
+      normalizedCategory.includes('kegiatanadministratif')
+    ) {
+      return ['LKS'];
+    }
+    if (/\bkat\b/i.test(categoryText)) {
+      return ['KAT'];
+    }
+
+    const legacyDetailEntries = Object.entries(details).map(([key, value]) => [
+      normalizeIdentifier(key),
+      normalizeIdentifier(value)
+    ]);
+    const matchedCategory = dayasosCategories.find((category) =>
+      legacyDetailEntries.some(([key, value]) =>
+        key === normalizeIdentifier(category) || value === normalizeIdentifier(category)
+      )
+    );
+    return [matchedCategory || 'LKS'];
+  }
+
+  if (jenisKategori && menuId !== 'uptd-ppa') {
+    return [jenisKategori];
+  }
+
+  if (menuId === 'uptd-ppa') {
+    return [getLocationStatus(location)];
+  }
+
+  const categories = Object.keys(details).filter((key) => String(details[key] ?? '').trim());
+  return categories.length > 0 ? categories : ['Lokasi tanpa rincian'];
+}
+
+function getLayerCategories(menuId, locations) {
+  if (menuId === 'dayasos') {
+    return dayasosCategories;
+  }
+
+  if (menuId === 'uptd-ppa') {
+    const statuses = ['Belum ditangani', 'Sedang ditangani', 'Sudah ditangani'];
+    return locations.some((location) =>
+      getLocationStatus(location) === 'Status tidak tersedia'
+    )
+      ? [...statuses, 'Status tidak tersedia']
+      : statuses;
+  }
+
+  const categories = new Set();
+  locations.forEach((location) => {
+    getLocationCategories(location, menuId).forEach((category) => categories.add(category));
+  });
+  return [...categories];
+}
+
+function belongsToBidang(location, bidangId) {
+  const bidang = normalizeIdentifier(location.nama_bidang).replace(/^bidang/, '');
+  const selectedBidang = normalizeIdentifier(bidangId).replace(/^bidang/, '');
+  return bidang === selectedBidang;
+}
+
 // ATURAN WARNA SETIAP POLIGON
-function styleFeature(feature) {
+function styleFeature(feature, selectedKecamatan) {
   const parentCode = feature.properties.parent_code;
   const district = districts[parentCode];
+  const isSelected = selectedKecamatan === null || district?.name === selectedKecamatan;
 
   return {
     fillColor: district ? district.color : '#BDBDBD',
-    fillOpacity: 0.55,
+    fillOpacity: isSelected
+      ? selectedKecamatan === null ? 0.55 : 0.75
+      : 0.12,
     color: '#ffffff',
     weight: 1,
-    opacity: 1
+    opacity: isSelected ? 1 : 0.2,
+    className: 'district-polygon'
   };
 }
 
@@ -168,82 +313,115 @@ function onEachVillage(feature, layer) {
 }
 
 function App() {
-  const [activeMenu, setActiveMenu] = useState('Peta Interaktif');
+  const [activeMenu, setActiveMenu] = useState('peta-utama');
+  const [selectedKecamatan, setSelectedKecamatan] = useState(null);
   const [mapLocations, setMapLocations] = useState([]);
   const [isLoadingLocations, setIsLoadingLocations] = useState(true);
   const [mapDataError, setMapDataError] = useState('');
-  const [enabledLayers, setEnabledLayers] = useState(() =>
-    Object.fromEntries(managedLayers.map(({ id }) => [id, true]))
-  );
-  const activeLayerCount = Object.values(enabledLayers).filter(Boolean).length;
+  const [enabledLayers, setEnabledLayers] = useState({});
+  const activeBidang = bidangMenus.find(({ id }) => id === activeMenu);
+  const bidangLocations = activeBidang
+    ? mapLocations.filter((location) => belongsToBidang(location, activeBidang.id))
+    : mapLocations;
+  const layerCategories = activeBidang
+    ? getLayerCategories(activeBidang.id, bidangLocations)
+    : [];
+  const visibleLocations = activeBidang
+    ? bidangLocations.filter((location) =>
+        getLocationCategories(location, activeBidang.id).some((category) =>
+          enabledLayers[`${activeBidang.id}:${normalizeIdentifier(category)}`] !== false
+        )
+      )
+    : mapLocations;
+  const activeLayerCount = layerCategories.filter((category) =>
+    enabledLayers[`${activeMenu}:${normalizeIdentifier(category)}`] !== false
+  ).length;
+
+  const statistics = activeMenu === 'peta-utama'
+    ? [
+        { label: 'Lokasi Terdata', value: `${mapLocations.length} Lokasi` },
+        { label: 'Wilayah Administratif', value: `${allFeatures.length} Desa` },
+        { label: 'Bidang Tersedia', value: `${bidangMenus.length} Bidang` }
+      ]
+    : activeMenu === 'uptd-ppa'
+      ? [
+          { label: 'Total Kasus Masuk', value: `${bidangLocations.length} Kasus` },
+          {
+            label: 'Kasus Ditangani',
+            value: `${bidangLocations.filter((location) =>
+              ['Sedang ditangani', 'Sudah ditangani'].includes(getLocationStatus(location))
+            ).length} Kasus`
+          },
+          {
+            label: 'Kasus Selesai',
+            value: `${bidangLocations.filter((location) =>
+              getLocationStatus(location) === 'Sudah ditangani'
+            ).length} Kasus`
+          }
+        ]
+      : [
+          { label: 'Total Lokasi', value: `${bidangLocations.length} Lokasi` },
+          { label: 'Subkategori', value: `${layerCategories.length} Kategori` },
+          {
+            label: 'Tahun Terbaru',
+            value: `${bidangLocations.reduce(
+              (latestYear, { tahun_kegiatan: year }) => Math.max(latestYear, Number(year) || 0),
+              0
+            ) || '—'}`
+          }
+        ];
 
   useEffect(() => {
-    const controller = new AbortController();
+    function loadCsvDatasets() {
+      setIsLoadingLocations(true);
+      setMapDataError('');
 
-    async function loadMapLocations() {
       try {
-        const { supabase } = await import('./supabaseClient.js');
-        if (controller.signal.aborted) {
+        const storedData = window.localStorage.getItem('data_gis_dinsos') ??
+          window.localStorage.getItem('csvDatasets');
+        if (!storedData) {
+          setMapLocations([]);
           return;
         }
 
-        setIsLoadingLocations(true);
-        setMapDataError('');
-        const pageSize = 1000;
-        const locations = [];
-        let offset = 0;
-        let hasMore = true;
-
-        while (hasMore && !controller.signal.aborted) {
-          const { data, error } = await supabase
-            .from('lokasi_kegiatan')
-            .select('id, latitude, longitude, nama_lokasi, nama_bidang, tahun_kegiatan')
-            .order('id', { ascending: true })
-            .range(offset, offset + pageSize - 1)
-            .abortSignal(controller.signal);
-
-          if (error) {
-            throw error;
-          }
-
-          const page = data ?? [];
-          locations.push(...page);
-          hasMore = page.length === pageSize;
-          offset += pageSize;
-        }
-
-        if (!controller.signal.aborted) {
-          setMapLocations(locations);
-          setMapDataError('');
-        }
+        const parsedData = JSON.parse(storedData);
+        setMapLocations(Array.isArray(parsedData) ? parsedData : []);
       } catch (error) {
-        if (!controller.signal.aborted) {
-          setMapDataError(
-            error instanceof Error
-              ? error.message
-              : error?.message ?? 'Gagal memuat lokasi dari Supabase.'
-          );
-        }
+        setMapLocations([]);
+        setMapDataError(
+          error instanceof Error
+            ? error.message
+            : 'Gagal membaca data CSV dari browser.'
+        );
       } finally {
-        if (!controller.signal.aborted) {
-          setIsLoadingLocations(false);
-        }
+        setIsLoadingLocations(false);
       }
     }
 
-    loadMapLocations();
-    return () => controller.abort();
-  }, [activeMenu]);
-
-  function renderSupabaseMarkers() {
-    return mapLocations.flatMap((location) => {
-      const layer = managedLayers.find(
-        ({ id }) => normalizeIdentifier(id) === normalizeIdentifier(location.nama_bidang)
-      );
-      if (!layer || !enabledLayers[layer.id]) {
-        return [];
+    function handleStorageChange(event) {
+      if (
+        event.key === 'data_gis_dinsos' ||
+        event.key === 'csvDatasets' ||
+        event.key === null
+      ) {
+        loadCsvDatasets();
       }
+    }
 
+    loadCsvDatasets();
+    window.addEventListener('storage', handleStorageChange);
+    window.addEventListener('dataGisDinsosUpdated', loadCsvDatasets);
+    window.addEventListener('csvDatasetsUpdated', loadCsvDatasets);
+
+    return () => {
+      window.removeEventListener('storage', handleStorageChange);
+      window.removeEventListener('dataGisDinsosUpdated', loadCsvDatasets);
+      window.removeEventListener('csvDatasetsUpdated', loadCsvDatasets);
+    };
+  }, []);
+
+  function renderCsvMarkers() {
+    return visibleLocations.flatMap((location, index) => {
       const latitude = Number(location.latitude);
       const longitude = Number(location.longitude);
       if (
@@ -259,30 +437,77 @@ function App() {
         return [];
       }
 
+      const status = activeMenu === 'uptd-ppa' ? getLocationStatus(location) : null;
+      const locationName = location.nama_item || location.nama_lokasi || 'Nama lokasi tidak tersedia';
+      const popupTitle = getLocationField(location, 'nama_lembaga_kegiatan');
       return [
-        <Marker key={location.id} position={[latitude, longitude]}>
-          <Tooltip direction="top" offset={[0, -8]} opacity={1}>
-            <strong>{location.nama_lokasi || 'Nama lokasi tidak tersedia'}</strong>
+        <Marker key={`${locationName}-${latitude}-${longitude}-${index}`} position={[latitude, longitude]}>
+          <Tooltip
+            permanent={true}
+            direction="top"
+            offset={[0, -8]}
+            opacity={1}
+            className="supabase-location-label"
+          >
+            <strong>{locationName}</strong>
             <br />
             {location.nama_bidang} · {location.tahun_kegiatan}
+            {status && (
+              <>
+                <br />
+                Status: {status}
+              </>
+            )}
           </Tooltip>
+          <Popup minWidth={320} maxWidth={400} className="custom-popup">
+            <div className="location-popup-content tw-text-slate-900 tw-w-full tw-p-1">
+              <h3 className="location-popup-title tw-mb-2 tw-border-b tw-border-slate-200 tw-pb-1 tw-text-base tw-font-bold">
+                {popupTitle !== '—' ? popupTitle : locationName}
+              </h3>
+              <dl className="location-popup-fields">
+                <div>
+                  <dt>Bidang</dt>
+                  <dd>{getLocationField(location, 'nama_bidang')}</dd>
+                </div>
+                <div>
+                  <dt>Jenis Kategori</dt>
+                  <dd>{getLocationField(location, 'jenis_kategori')}</dd>
+                </div>
+                <div>
+                  <dt>Lokasi</dt>
+                  <dd>{getLocationField(location, 'nama_lokasi')}</dd>
+                </div>
+                <div>
+                  <dt>Tahun Kegiatan</dt>
+                  <dd>{getLocationField(location, 'tahun_kegiatan')}</dd>
+                </div>
+                <div>
+                  <dt>Sasaran / Target</dt>
+                  <dd>{getLocationField(location, 'sasaran_target', 'Sasaran / Target')}</dd>
+                </div>
+                <div>
+                  <dt>Keterangan</dt>
+                  <dd>{getLocationField(location, 'keterangan')}</dd>
+                </div>
+              </dl>
+            </div>
+          </Popup>
         </Marker>
       ];
     });
   }
 
   const menus = [
-    { name: 'Dashboard Admin', icon: LayoutDashboard },
-    { name: 'Peta Interaktif', icon: Map },
-    { name: 'Data Wilayah', icon: MapPin },
-    { name: 'Manajemen Layer', icon: Layers }
+    { id: 'peta-utama', name: 'Peta Utama', icon: Map },
+    { id: 'dashboard-admin', name: 'Dashboard Admin', icon: LayoutDashboard },
+    ...bidangMenus.map((bidang) => ({ ...bidang, icon: MapPin }))
   ];
 
   return (
     <div className="app-container">
 
       {/* SIDEBAR */}
-      <aside className={`sidebar ${activeMenu === 'Manajemen Layer' ? 'sidebar-layer-open' : ''}`}>
+      <aside className="sidebar">
 
         <div className="brand">
           <div className="brand-icon">
@@ -304,10 +529,9 @@ function App() {
             return (
               <button
                 key={item.name}
-                className={`menu-item ${
-                  activeMenu === item.name ? 'active' : ''
-                }`}
-                onClick={() => setActiveMenu(item.name)}
+                className={`menu-item ${activeMenu === item.id ? 'active' : ''}`}
+                onClick={() => setActiveMenu(item.id)}
+                aria-current={activeMenu === item.id ? 'page' : undefined}
               >
                 <Icon size={19} />
                 <span>{item.name}</span>
@@ -315,49 +539,6 @@ function App() {
             );
           })}
         </div>
-
-        {activeMenu === 'Manajemen Layer' && (
-          <section className="layer-manager" aria-labelledby="layer-manager-title">
-            <div className="layer-manager-heading">
-              <div>
-                <h3 id="layer-manager-title">Manajemen Layer</h3>
-                <p>Atur tampilan data bidang</p>
-              </div>
-              <span className="layer-count">{activeLayerCount}/6</span>
-            </div>
-
-            <div className="layer-list">
-              {managedLayers.map((layer) => (
-                <label className="layer-item" key={layer.id}>
-                  <span className="layer-item-info">
-                    <span
-                      className="layer-color"
-                      style={{ '--layer-color': layer.color }}
-                      aria-hidden="true"
-                    />
-                    <span className="layer-item-copy">
-                      <span className="layer-name">{layer.name}</span>
-                      <span className="layer-state">
-                        {enabledLayers[layer.id] ? 'Aktif' : 'Nonaktif'}
-                      </span>
-                    </span>
-                  </span>
-                  <input
-                    className="layer-toggle-input"
-                    type="checkbox"
-                    checked={enabledLayers[layer.id]}
-                    onChange={() => setEnabledLayers((current) => ({
-                      ...current,
-                      [layer.id]: !current[layer.id]
-                    }))}
-                    aria-label={`${enabledLayers[layer.id] ? 'Matikan' : 'Aktifkan'} ${layer.name}`}
-                  />
-                  <span className="layer-toggle" aria-hidden="true" />
-                </label>
-              ))}
-            </div>
-          </section>
-        )}
 
         <div className="sidebar-bottom">
           <span className="status-indicator"></span>
@@ -386,17 +567,18 @@ function App() {
         </header>
 
         {/* CONTENT */}
-        {activeMenu === 'Dashboard Admin' ? (
+        {activeMenu === 'dashboard-admin' ? (
           <AdminDashboard />
         ) : (
         <section className="content-area">
 
           <div className="welcome">
             <div>
-              <h2>Peta Interaktif</h2>
+              <h2>{activeBidang?.name ?? 'Peta Utama'}</h2>
               <p>
-                Visualisasi batas administrasi desa dan kecamatan
-                Kabupaten Manggarai Barat, Nusa Tenggara Timur
+                {activeBidang
+                  ? `Visualisasi sebaran data ${activeBidang.name} di Kabupaten Manggarai Barat`
+                  : 'Visualisasi gabungan data bidang serta batas administrasi Kabupaten Manggarai Barat'}
               </p>
             </div>
           </div>
@@ -404,38 +586,20 @@ function App() {
           {/* STATISTICS */}
           <div className="statistics">
 
-            <div className="stat-card">
-              <div className="stat-icon blue">
-                <MapPin size={23} />
-              </div>
-
-              <div>
-                <span>Kecamatan</span>
-                <h3>12 Kecamatan</h3>
-              </div>
-            </div>
-
-            <div className="stat-card">
-              <div className="stat-icon green">
-                <Layers size={23} />
-              </div>
-
-              <div>
-                <span>Data Wilayah</span>
-                <h3>{allFeatures.length} Poligon Desa</h3>
-              </div>
-            </div>
-
-            <div className="stat-card">
-              <div className="stat-icon orange">
-                <Map size={23} />
-              </div>
-
-              <div>
-                <span>Sumber Peta Dasar</span>
-                <h3>Peta Jalan &amp; Satelit (Esri)</h3>
-              </div>
-            </div>
+            {statistics.map((statistic, index) => {
+              const Icon = statisticIcons[index];
+              return (
+                <div className="stat-card" key={statistic.label}>
+                <div className={`stat-icon ${['blue', 'green', 'orange'][index]}`}>
+                  <Icon size={23} />
+                </div>
+                  <div>
+                    <span>{statistic.label}</span>
+                    <h3>{statistic.value}</h3>
+                  </div>
+                </div>
+              );
+            })}
 
           </div>
 
@@ -445,8 +609,12 @@ function App() {
             <div className="map-header">
 
               <div>
-                <h3>Peta Administrasi Kabupaten Manggarai Barat</h3>
-                <span>Batas desa/kelurahan dibedakan berdasarkan kecamatan</span>
+                <h3>{activeBidang ? `Peta ${activeBidang.name}` : 'Peta Gabungan Kabupaten Manggarai Barat'}</h3>
+                <span>
+                  {activeBidang
+                    ? `${bidangLocations.length} lokasi bidang · ${layerCategories.length} kategori layer`
+                    : 'Batas desa/kelurahan dan data gabungan seluruh bidang'}
+                </span>
               </div>
 
               <button
@@ -485,9 +653,9 @@ function App() {
 
                   <LayersControl.BaseLayer checked name="Citra Satelit">
                     <TileLayer
-                      attribution='Tiles &copy; Esri — Source: Esri, Maxar, Earthstar Geographics, and the GIS User Community'
-                      url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
-                      maxZoom={19}
+                      attribution='&copy; Google'
+                      url="https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}"
+                      maxZoom={20}
                     />
                   </LayersControl.BaseLayer>
 
@@ -517,13 +685,61 @@ function App() {
                 {/* BATAS DAN WARNA 12 KECAMATAN */}
                 <GeoJSON
                   data={villageGeoJSON}
-                  style={styleFeature}
+                  style={(feature) => styleFeature(feature, selectedKecamatan)}
                   onEachFeature={onEachVillage}
                 />
 
-                {renderSupabaseMarkers()}
+                {renderCsvMarkers()}
 
               </MapContainer>
+
+              {activeBidang && (
+                <section className="layer-manager map-layer-manager" aria-labelledby="layer-manager-title">
+                  <div className="layer-manager-heading">
+                    <div>
+                      <h3 id="layer-manager-title">Manajemen Layer</h3>
+                      <p>Filter subkategori {activeBidang.name}</p>
+                    </div>
+                    <span className="layer-count">{activeLayerCount}/{layerCategories.length}</span>
+                  </div>
+                  <div className="layer-list">
+                    {layerCategories.length > 0 ? layerCategories.map((category) => {
+                      const layerKey = `${activeMenu}:${normalizeIdentifier(category)}`;
+                      const isEnabled = enabledLayers[layerKey] !== false;
+                      return (
+                        <label className="layer-item" key={layerKey}>
+                          <span className="layer-item-info">
+                            <span
+                              className="layer-color"
+                              style={{ '--layer-color': activeBidang.color }}
+                              aria-hidden="true"
+                            />
+                            <span className="layer-item-copy">
+                              <span className="layer-name">{category}</span>
+                              <span className="layer-state">
+                                {isEnabled ? 'Aktif' : 'Nonaktif'}
+                              </span>
+                            </span>
+                          </span>
+                          <input
+                            className="layer-toggle-input"
+                            type="checkbox"
+                            checked={isEnabled}
+                            onChange={() => setEnabledLayers((current) => ({
+                              ...current,
+                              [layerKey]: !isEnabled
+                            }))}
+                            aria-label={`${isEnabled ? 'Matikan' : 'Aktifkan'} layer ${category}`}
+                          />
+                          <span className="layer-toggle" aria-hidden="true" />
+                        </label>
+                      );
+                    }) : (
+                      <p className="layer-empty">Belum ada data untuk bidang ini.</p>
+                    )}
+                  </div>
+                </section>
+              )}
 
               {/* MAP LEGEND */}
               <div className="map-legend district-legend">
@@ -531,13 +747,24 @@ function App() {
                 <strong>LEGENDA KECAMATAN</strong>
 
                 {Object.entries(districts).map(([code, district]) => (
-                  <div className="district-legend-item" key={code}>
+                  <button
+                    className={`district-legend-item ${
+                      selectedKecamatan === district.name ? 'active' : ''
+                    }`}
+                    key={code}
+                    type="button"
+                    aria-pressed={selectedKecamatan === district.name}
+                    onClick={() => setSelectedKecamatan((current) =>
+                      current === district.name ? null : district.name
+                    )}
+                  >
                     <span
                       className="district-swatch"
                       style={{ backgroundColor: district.color }}
-                    ></span>
+                      aria-hidden="true"
+                    />
                     <span>{district.name}</span>
-                  </div>
+                  </button>
                 ))}
 
               </div>
@@ -561,10 +788,10 @@ function App() {
               Warna poligon menunjukkan kecamatan berdasarkan kode wilayah.
               {' '}
               {isLoadingLocations
-                ? 'Memuat lokasi dari Supabase...'
+                ? 'Memuat lokasi dari LocalStorage...'
                 : mapDataError
                   ? `Gagal memuat lokasi: ${mapDataError}`
-                  : `${mapLocations.length} lokasi dimuat dari Supabase.`}
+                  : `${mapLocations.length} lokasi dimuat dari localStorage browser.`}
             </span>
           </div>
 

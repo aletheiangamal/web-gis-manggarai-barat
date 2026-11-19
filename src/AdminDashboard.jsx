@@ -11,10 +11,12 @@ import {
   ShieldCheck,
   UploadCloud
 } from 'lucide-react'
-
-import { importCsvToSupabase } from './importCsvToSupabase.js'
+import Papa from 'papaparse'
 
 const bidangOptions = ['Dayasos', 'Rehsos', 'UPTD PPA', 'KHP2HA', 'P3A', 'PSKB']
+const dayasosCategoryOptions = ['Lembaga (LKS)', 'TKSK', 'KAT', 'LK3', 'TMP']
+const dataStorageKey = 'data_gis_dinsos'
+const legacyDataStorageKey = 'csvDatasets'
 
 function formatFileSize(size) {
   if (size < 1024) return `${size} B`
@@ -22,9 +24,158 @@ function formatFileSize(size) {
   return `${(size / (1024 * 1024)).toFixed(1)} MB`
 }
 
+function normalizeHeader(header) {
+  return String(header).toLowerCase().replace(/[^a-z0-9]/g, '')
+}
+
+function getRowValue(row, aliases) {
+  const normalizedRow = new Map(
+    Object.entries(row).map(([header, value]) => [normalizeHeader(header), value])
+  )
+
+  for (const alias of aliases) {
+    const value = normalizedRow.get(normalizeHeader(alias))
+    if (value !== undefined && String(value).trim() !== '') {
+      return String(value).trim()
+    }
+  }
+
+  return ''
+}
+
+function parseCsvFile(file) {
+  return new Promise((resolve, reject) => {
+    Papa.parse(file, {
+      header: true,
+      skipEmptyLines: 'greedy',
+      transformHeader: (header) => header.trim(),
+      complete: (result) => {
+        if (result.errors.length > 0) {
+          reject(new Error(
+            `Format CSV tidak valid: ${result.errors
+              .map(({ code, message }) => `${code}: ${message}`)
+              .join('; ')}`
+          ))
+          return
+        }
+        if (!result.meta.fields?.length) {
+          reject(new Error('CSV harus memiliki baris header dan data.'))
+          return
+        }
+        resolve(result.data)
+      },
+      error: (error) => reject(new Error(`Gagal membaca CSV: ${error.message}`))
+    })
+  })
+}
+
+async function parseExcelFile(file) {
+  const XLSX = await import('xlsx')
+  const workbook = XLSX.read(await file.arrayBuffer(), { type: 'array' })
+  const firstSheetName = workbook.SheetNames[0]
+  if (!firstSheetName) {
+    throw new Error('Berkas Excel tidak memiliki sheet.')
+  }
+
+  const firstSheet = workbook.Sheets[firstSheetName]
+  return XLSX.utils.sheet_to_json(firstSheet, { defval: '', raw: true })
+}
+
+async function parseSpreadsheetFile(file) {
+  const extension = file.name.split('.').pop()?.toLowerCase()
+
+  if (extension === 'csv') {
+    return parseCsvFile(file)
+  }
+  if (extension === 'xlsx' || extension === 'xls') {
+    return parseExcelFile(file)
+  }
+
+  throw new Error('Format file tidak didukung. Pilih file .csv, .xlsx, atau .xls.')
+}
+
+function mapRows(rows, namaBidang, defaultCategory = '') {
+  const errors = []
+  const records = []
+  const coordinateHeaders = new Set([
+    'latitude', 'lat', 'lintang',
+    '_Lokasi LKS (Titik Koordinat)_latitude',
+    'longitude', 'long', 'lon', 'lng', 'bujur',
+    '_Lokasi LKS (Titik Koordinat)_longitude'
+  ].map(normalizeHeader))
+  const locationHeaders = new Set([
+    'nama_lokasi', 'nama lokasi', 'lokasi', 'nama_tempat', 'location', 'Nama LKS'
+  ].map(normalizeHeader))
+  const yearHeaders = new Set([
+    'tahun_kegiatan', 'tahun kegiatan', 'tahun', 'year', 'Tahun Berdiri LKS'
+  ].map(normalizeHeader))
+  const categoryHeaders = new Set(['jenis_kategori', 'jenis kategori', 'kategori'].map(normalizeHeader))
+  const bidangHeaders = new Set(['nama_bidang', 'nama bidang'].map(normalizeHeader))
+
+  rows.forEach((row, index) => {
+    const rowNumber = index + 1
+    const initialErrorCount = errors.length
+    const latitudeText = getRowValue(row, [
+      'latitude', 'lat', 'lintang',
+      '_Lokasi LKS (Titik Koordinat)_latitude'
+    ])
+    const longitudeText = getRowValue(row, [
+      'longitude', 'long', 'lon', 'lng', 'bujur',
+      '_Lokasi LKS (Titik Koordinat)_longitude'
+    ])
+    const namaLokasi = getRowValue(row, [
+      'nama_lokasi', 'nama lokasi', 'lokasi', 'nama_tempat', 'location', 'Nama LKS'
+    ])
+    const tahunText = getRowValue(row, [
+      'tahun_kegiatan', 'tahun kegiatan', 'tahun', 'year', 'Tahun Berdiri LKS'
+    ])
+    const yearMatch = tahunText.match(/\d{4}/)
+    const tahunKegiatan = yearMatch ? Number(yearMatch[0]) : 2026
+    const jenisKategori = getRowValue(row, ['jenis_kategori', 'jenis kategori', 'kategori']) ||
+      defaultCategory ||
+      (getRowValue(row, ['Nama LKS']) ? 'Lembaga (LKS)' : '')
+    const latitude = Number(latitudeText)
+    const longitude = Number(longitudeText)
+
+    if (!latitudeText || !Number.isFinite(latitude) || latitude < -90 || latitude > 90) {
+      errors.push(`Baris data ${rowNumber}: latitude kosong atau tidak valid (rentang -90 sampai 90).`)
+    }
+    if (!longitudeText || !Number.isFinite(longitude) || longitude < -180 || longitude > 180) {
+      errors.push(`Baris data ${rowNumber}: longitude kosong atau tidak valid (rentang -180 sampai 180).`)
+    }
+    if (!namaLokasi) {
+      errors.push(`Baris data ${rowNumber}: nama_lokasi wajib diisi.`)
+    }
+
+    if (errors.length === initialErrorCount) {
+      records.push({
+        latitude,
+        longitude,
+        nama_lokasi: namaLokasi,
+        nama_bidang: namaBidang,
+        tahun_kegiatan: tahunKegiatan,
+        jenis_kategori: jenisKategori,
+        detail_informasi: Object.fromEntries(
+          Object.entries(row).filter(([header, value]) =>
+            !coordinateHeaders.has(normalizeHeader(header)) &&
+            !locationHeaders.has(normalizeHeader(header)) &&
+            !yearHeaders.has(normalizeHeader(header)) &&
+            !categoryHeaders.has(normalizeHeader(header)) &&
+            !bidangHeaders.has(normalizeHeader(header)) &&
+            String(value ?? '').trim() !== ''
+          )
+        )
+      })
+    }
+  })
+
+  return { records, errors }
+}
+
 function AdminDashboard() {
   const fileInputRef = useRef(null)
   const [selectedBidang, setSelectedBidang] = useState('')
+  const [selectedDayasosCategory, setSelectedDayasosCategory] = useState('')
   const [file, setFile] = useState(null)
   const [isUploading, setIsUploading] = useState(false)
   const [notification, setNotification] = useState(null)
@@ -44,23 +195,55 @@ function AdminDashboard() {
     }
 
     if (!file) {
-      setNotification({ type: 'error', message: 'Pilih file CSV yang akan diunggah.' })
+      setNotification({ type: 'error', message: 'Pilih file spreadsheet yang akan diunggah.' })
       return
     }
 
     setIsUploading(true)
     try {
-      const result = await importCsvToSupabase(file, selectedBidang)
+      const rows = await parseSpreadsheetFile(file)
+      if (rows.length === 0) {
+        throw new Error('File spreadsheet tidak berisi baris data.')
+      }
+
+      const defaultCategory = selectedBidang === 'Dayasos' ? selectedDayasosCategory : ''
+      const { records, errors } = mapRows(rows, selectedBidang, defaultCategory)
+      if (errors.length > 0) {
+        throw new Error(`Data spreadsheet tidak disimpan:\n${errors.join('\n')}`)
+      }
+
+      let existingRecords = []
+      const storedData = window.localStorage.getItem(dataStorageKey) ??
+        window.localStorage.getItem(legacyDataStorageKey)
+      if (storedData) {
+        try {
+          const parsedData = JSON.parse(storedData)
+          if (Array.isArray(parsedData)) {
+            existingRecords = parsedData
+          }
+        } catch {
+          throw new Error('Data GIS yang tersimpan rusak. Hapus data browser lalu coba lagi.')
+        }
+      }
+
+      const combinedRecords = [...existingRecords, ...records]
+      window.localStorage.setItem(dataStorageKey, JSON.stringify(combinedRecords))
+      window.dispatchEvent(new CustomEvent('dataGisDinsosUpdated', {
+        detail: combinedRecords
+      }))
+
       setNotification({
         type: 'success',
-        message: `${result.jumlahDataDiimpor} baris dari bidang ${result.namaBidang} berhasil diunggah ke Supabase.`
+        message: `${records.length} baris dari bidang ${selectedBidang} berhasil disimpan ke localStorage browser.`
       })
       setFile(null)
       if (fileInputRef.current) fileInputRef.current.value = ''
     } catch (error) {
       setNotification({
         type: 'error',
-        message: error instanceof Error ? error.message : 'Terjadi kesalahan saat mengunggah CSV.'
+        message: error instanceof Error
+          ? error.message
+          : 'Terjadi kesalahan saat mengunggah spreadsheet.'
       })
     } finally {
       setIsUploading(false)
@@ -70,208 +253,284 @@ function AdminDashboard() {
   const NotificationIcon = notification?.type === 'success' ? CheckCircle2 : AlertCircle
 
   return (
-    <main className="tw-relative tw-min-h-screen tw-overflow-hidden tw-bg-slate-950 tw-font-sans tw-text-slate-100">
-      <div
-        className="tw-pointer-events-none tw-absolute tw-inset-0 tw-bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] tw-from-indigo-950/60 tw-via-slate-950 tw-to-slate-950"
-        aria-hidden="true"
-      />
-      <div className="tw-relative tw-mx-auto tw-w-full tw-max-w-7xl tw-px-4 tw-py-8 sm:tw-px-6 sm:tw-py-10 lg:tw-px-8">
-        <header className="tw-mb-10 tw-flex tw-items-center tw-justify-between tw-gap-4">
-          <div className="tw-flex tw-items-center tw-gap-3">
-            <div className="tw-grid tw-h-12 tw-w-12 tw-place-items-center tw-rounded-2xl tw-border tw-border-indigo-400/20 tw-bg-indigo-500/10 tw-text-indigo-300 tw-shadow-lg tw-shadow-indigo-950/40">
-              <MapPinned size={23} />
+    <div className="tw-min-h-screen tw-bg-slate-950 tw-font-sans tw-text-slate-100">
+      <div className="tw-mx-auto tw-w-full tw-max-w-7xl tw-px-4 sm:tw-px-6 lg:tw-px-8">
+        <header className="tw-flex tw-items-center tw-justify-between tw-gap-4 tw-border-b tw-border-slate-800 tw-py-6">
+          <div className="tw-flex tw-min-w-0 tw-items-center tw-gap-3">
+            <div className="tw-flex tw-h-11 tw-w-11 tw-shrink-0 tw-items-center tw-justify-center tw-rounded-xl tw-bg-indigo-500/15 tw-text-indigo-300">
+              <MapPinned size={22} />
             </div>
-            <div>
-              <p className="tw-text-xs tw-font-semibold tw-uppercase tw-tracking-[0.22em] tw-text-indigo-300">
+            <div className="tw-min-w-0">
+              <p className="tw-text-xs tw-font-medium tw-uppercase tw-tracking-[0.16em] tw-text-slate-400">
                 Web GIS Manggarai Barat
               </p>
-              <h1 className="tw-mt-1 tw-text-xl tw-font-semibold tw-tracking-tight sm:tw-text-2xl">
+              <h1 className="tw-mt-1 tw-truncate tw-text-xl tw-font-semibold tw-tracking-tight sm:tw-text-2xl">
                 Dashboard Admin
               </h1>
             </div>
           </div>
-          <div className="tw-hidden tw-items-center tw-gap-2 tw-rounded-full tw-border tw-border-emerald-400/20 tw-bg-emerald-400/5 tw-px-3 tw-py-2 tw-text-xs tw-font-medium tw-text-emerald-300 sm:tw-flex">
-            <span className="tw-h-2 tw-w-2 tw-rounded-full tw-bg-emerald-400 tw-shadow-[0_0_10px_rgba(52,211,153,0.7)]" />
-            Data geografis
+          <div className="tw-flex tw-shrink-0 tw-items-center tw-gap-2 tw-rounded-full tw-border tw-border-slate-800 tw-bg-slate-900 tw-px-3 tw-py-2 tw-text-xs tw-font-medium tw-text-slate-300">
+            <Database className="tw-text-indigo-300" size={15} />
+            Spreadsheet ke LocalStorage
           </div>
         </header>
 
-        <section className="tw-grid tw-items-start tw-gap-6 lg:tw-grid-cols-[minmax(0,1.35fr)_minmax(280px,0.65fr)]">
-          <div className="tw-overflow-hidden tw-rounded-3xl tw-border tw-border-white/10 tw-bg-slate-900/80 tw-shadow-2xl tw-shadow-black/30 tw-backdrop-blur-xl">
-            <div className="tw-border-b tw-border-white/10 tw-p-6 sm:tw-p-8">
-              <div className="tw-mb-5 tw-inline-flex tw-items-center tw-gap-2 tw-rounded-full tw-border tw-border-indigo-400/20 tw-bg-indigo-400/10 tw-px-3 tw-py-1.5 tw-text-xs tw-font-medium tw-text-indigo-200">
-                <UploadCloud size={14} />
-                Impor data peta
-              </div>
-              <h2 className="tw-text-2xl tw-font-semibold tw-tracking-tight sm:tw-text-3xl">
-                Unggah spreadsheet bidang
-              </h2>
-              <p className="tw-mt-3 tw-max-w-2xl tw-text-sm tw-leading-6 tw-text-slate-400">
-                Pilih bidang dan file CSV. Data akan divalidasi lalu ditambahkan ke tabel
-                lokasi kegiatan Supabase.
-              </p>
-            </div>
-
-            <form className="tw-space-y-6 tw-p-6 sm:tw-p-8" onSubmit={handleUpload}>
-              <div>
-                <label
-                  className="tw-mb-2 tw-block tw-text-sm tw-font-medium tw-text-slate-200"
-                  htmlFor="admin-bidang"
-                >
-                  Nama bidang
-                </label>
-                <div className="tw-relative">
-                  <select
-                    className="tw-w-full tw-appearance-none tw-rounded-xl tw-border tw-border-slate-700 tw-bg-slate-950/70 tw-px-4 tw-py-3.5 tw-pr-11 tw-text-sm tw-text-slate-100 tw-outline-none tw-transition focus:tw-border-indigo-400 focus:tw-ring-4 focus:tw-ring-indigo-400/10 disabled:tw-cursor-not-allowed disabled:tw-opacity-60"
-                    disabled={isUploading}
-                    id="admin-bidang"
-                    onChange={(event) => {
-                      setSelectedBidang(event.target.value)
-                      setNotification(null)
-                    }}
-                    value={selectedBidang}
-                  >
-                    <option className="tw-bg-slate-900" value="">Pilih bidang Dinsos P3A</option>
-                    {bidangOptions.map((bidang) => (
-                      <option className="tw-bg-slate-900" key={bidang} value={bidang}>
-                        {bidang}
-                      </option>
-                    ))}
-                  </select>
-                  <ChevronDown
-                    className="tw-pointer-events-none tw-absolute tw-right-4 tw-top-1/2 -tw-translate-y-1/2 tw-text-slate-500"
-                    size={17}
-                  />
-                </div>
-              </div>
-
-              <div>
-                <span className="tw-mb-2 tw-block tw-text-sm tw-font-medium tw-text-slate-200">
-                  File spreadsheet
-                </span>
-                <label
-                  className={`tw-group tw-flex tw-cursor-pointer tw-flex-col tw-items-center tw-justify-center tw-rounded-2xl tw-border tw-border-dashed tw-px-5 tw-py-8 tw-text-center tw-transition ${
-                    isUploading
-                      ? 'tw-cursor-not-allowed tw-border-slate-800 tw-bg-slate-950/30 tw-opacity-60'
-                      : 'tw-border-slate-700 tw-bg-slate-950/40 hover:tw-border-indigo-400/60 hover:tw-bg-indigo-400/[0.04]'
-                  }`}
-                  htmlFor="admin-csv-file"
-                >
-                  <input
-                    accept=".csv,text/csv"
-                    className="tw-sr-only"
-                    disabled={isUploading}
-                    id="admin-csv-file"
-                    onChange={handleFileChange}
-                    ref={fileInputRef}
-                    type="file"
-                  />
-                  <span className="tw-mb-3 tw-grid tw-h-12 tw-w-12 tw-place-items-center tw-rounded-2xl tw-bg-slate-800 tw-text-indigo-300 tw-transition group-hover:tw-bg-indigo-400/10">
-                    <FileSpreadsheet size={22} />
-                  </span>
-                  {file ? (
-                    <>
-                      <span className="tw-max-w-full tw-break-all tw-text-sm tw-font-medium tw-text-slate-100">
-                        {file.name}
-                      </span>
-                      <span className="tw-mt-1 tw-text-xs tw-text-slate-500">
-                        {formatFileSize(file.size)} · Klik untuk mengganti file
-                      </span>
-                    </>
-                  ) : (
-                    <>
-                      <span className="tw-text-sm tw-font-medium tw-text-slate-200">
-                        Klik untuk memilih file CSV
-                      </span>
-                      <span className="tw-mt-1 tw-text-xs tw-text-slate-500">
-                        Format .csv · file tetap berada di perangkat sampai diproses
-                      </span>
-                    </>
-                  )}
-                </label>
-              </div>
-
-              {notification && (
-                <div
-                  className={`tw-flex tw-items-start tw-gap-3 tw-whitespace-pre-line tw-rounded-xl tw-border tw-p-4 tw-text-sm ${
-                    notification.type === 'success'
-                      ? 'tw-border-emerald-400/20 tw-bg-emerald-400/[0.07] tw-text-emerald-200'
-                      : 'tw-border-rose-400/20 tw-bg-rose-400/[0.07] tw-text-rose-200'
-                  }`}
-                  role={notification.type === 'error' ? 'alert' : 'status'}
-                >
-                  <NotificationIcon className="tw-mt-0.5 tw-shrink-0" size={18} />
-                  <span>{notification.message}</span>
-                </div>
-              )}
-
-              <button
-                className="tw-inline-flex tw-w-full tw-items-center tw-justify-center tw-gap-2.5 tw-rounded-xl tw-bg-indigo-500 tw-px-5 tw-py-3.5 tw-text-sm tw-font-semibold tw-text-white tw-shadow-lg tw-shadow-indigo-950/40 tw-transition hover:tw-bg-indigo-400 focus-visible:tw-outline-none focus-visible:tw-ring-4 focus-visible:tw-ring-indigo-400/30 disabled:tw-cursor-not-allowed disabled:tw-bg-slate-700 disabled:tw-text-slate-400 disabled:tw-shadow-none"
-                disabled={isUploading}
-                type="submit"
-              >
-                {isUploading ? (
-                  <>
-                    <LoaderCircle className="tw-animate-spin" size={18} />
-                    Memproses dan mengunggah...
-                  </>
-                ) : (
-                  <>
-                    <UploadCloud size={18} />
-                    Unggah ke Peta
-                  </>
-                )}
-              </button>
-            </form>
+        <div className="tw-py-8 sm:tw-py-10">
+          <div className="tw-mb-7 tw-max-w-2xl">
+            <p className="tw-text-sm tw-font-medium tw-text-indigo-300">Pusat data spasial</p>
+            <h2 className="tw-mt-2 tw-text-2xl tw-font-semibold tw-tracking-tight sm:tw-text-3xl">
+              Impor data kegiatan
+            </h2>
+            <p className="tw-mt-2 tw-text-sm tw-leading-6 tw-text-slate-400">
+              Pilih bidang dan file CSV atau Excel untuk menambahkan lokasi kegiatan ke peta.
+              Data akan divalidasi sebelum disimpan.
+            </p>
           </div>
 
-          <aside className="tw-space-y-4">
-            <div className="tw-rounded-3xl tw-border tw-border-white/10 tw-bg-slate-900/60 tw-p-6 tw-backdrop-blur-xl">
-              <div className="tw-mb-4 tw-flex tw-h-10 tw-w-10 tw-items-center tw-justify-center tw-rounded-xl tw-bg-sky-400/10 tw-text-sky-300">
-                <Database size={19} />
-              </div>
-              <h3 className="tw-font-semibold tw-text-slate-100">Kolom yang dibutuhkan</h3>
-              <p className="tw-mt-2 tw-text-sm tw-leading-6 tw-text-slate-400">
-                CSV harus memiliki latitude, longitude, nama_lokasi, dan tahun_kegiatan.
-                Kolom lain disimpan sebagai detail informasi.
-              </p>
-              <div className="tw-mt-4 tw-flex tw-flex-wrap tw-gap-2">
-                {['latitude', 'longitude', 'nama_lokasi', 'tahun_kegiatan'].map((column) => (
-                  <code
-                    className="tw-rounded-lg tw-border tw-border-white/10 tw-bg-slate-950/70 tw-px-2.5 tw-py-1.5 tw-text-[11px] tw-text-slate-300"
-                    key={column}
-                  >
-                    {column}
-                  </code>
-                ))}
-              </div>
-            </div>
-
-            <div className="tw-rounded-3xl tw-border tw-border-amber-300/15 tw-bg-amber-300/[0.04] tw-p-5">
-              <div className="tw-flex tw-gap-3">
-                <div className="tw-mt-0.5 tw-text-amber-200">
-                  <LockKeyhole size={17} />
+          <section className="tw-grid tw-items-start tw-gap-5 lg:tw-grid-cols-[minmax(0,1.45fr)_minmax(300px,0.8fr)]">
+            <section
+              aria-labelledby="upload-card-title"
+              className="tw-overflow-hidden tw-rounded-xl tw-border tw-border-slate-700/80 tw-bg-slate-800 tw-shadow-lg tw-shadow-black/20"
+            >
+              <div className="tw-flex tw-items-center tw-gap-3 tw-border-b tw-border-slate-700/80 tw-p-5 sm:tw-p-6">
+                <div className="tw-flex tw-h-10 tw-w-10 tw-shrink-0 tw-items-center tw-justify-center tw-rounded-lg tw-bg-indigo-500/15 tw-text-indigo-300">
+                  <UploadCloud size={19} />
                 </div>
                 <div>
-                  <h3 className="tw-text-sm tw-font-semibold tw-text-amber-100">
-                    Akses admin dan keamanan
+                  <h3 className="tw-font-semibold tw-text-white" id="upload-card-title">
+                    Unggah spreadsheet
                   </h3>
-                  <p className="tw-mt-1.5 tw-text-xs tw-leading-5 tw-text-amber-100/65">
-                    Lindungi halaman ini dengan autentikasi admin dan kebijakan RLS
-                    sebelum mengaktifkan hak tulis ke database.
+                  <p className="tw-mt-0.5 tw-text-xs tw-text-slate-400">
+                    Format file yang didukung: .csv, .xlsx, .xls
                   </p>
                 </div>
               </div>
-            </div>
 
-            <div className="tw-flex tw-items-center tw-gap-2 tw-px-1 tw-text-xs tw-text-slate-500">
-              <ShieldCheck className="tw-text-emerald-400" size={15} />
-              Validasi koordinat dilakukan sebelum data dikirim
-            </div>
-          </aside>
-        </section>
+              <form className="tw-space-y-5 tw-p-5 sm:tw-p-6" onSubmit={handleUpload}>
+                <div>
+                  <label
+                    className="tw-mb-2 tw-block tw-text-sm tw-font-medium tw-text-slate-200"
+                    htmlFor="admin-bidang"
+                  >
+                    Nama bidang
+                  </label>
+                  <div className="tw-relative">
+                    <MapPinned
+                      className="tw-pointer-events-none tw-absolute tw-left-3.5 tw-top-1/2 -tw-translate-y-1/2 tw-text-slate-500"
+                      size={17}
+                    />
+                    <select
+                      className="tw-w-full tw-appearance-none tw-rounded-lg tw-border tw-border-slate-700 tw-bg-zinc-900 tw-px-10 tw-py-3 tw-pr-11 tw-text-sm tw-text-white tw-outline-none tw-transition focus:tw-border-indigo-400 focus:tw-ring-4 focus:tw-ring-indigo-500/15 disabled:tw-cursor-not-allowed disabled:tw-opacity-60"
+                      disabled={isUploading}
+                      id="admin-bidang"
+                      onChange={(event) => {
+                        setSelectedBidang(event.target.value)
+                        setNotification(null)
+                      }}
+                      value={selectedBidang}
+                    >
+                      <option className="tw-bg-zinc-900" value="">
+                        Pilih bidang Dinsos P3A
+                      </option>
+                      {bidangOptions.map((bidang) => (
+                        <option className="tw-bg-zinc-900" key={bidang} value={bidang}>
+                          {bidang}
+                        </option>
+                      ))}
+                    </select>
+                    <ChevronDown
+                      className="tw-pointer-events-none tw-absolute tw-right-3.5 tw-top-1/2 -tw-translate-y-1/2 tw-text-slate-500"
+                      size={16}
+                    />
+                  </div>
+                </div>
+
+                {selectedBidang === 'Dayasos' && (
+                  <div>
+                    <label
+                      className="tw-mb-2 tw-block tw-text-sm tw-font-medium tw-text-slate-200"
+                      htmlFor="admin-dayasos-category"
+                    >
+                      Jenis Kategori Data
+                    </label>
+                    <div className="tw-relative">
+                      <select
+                        className="tw-w-full tw-appearance-none tw-rounded-lg tw-border tw-border-slate-700 tw-bg-zinc-900 tw-px-4 tw-py-3 tw-pr-11 tw-text-sm tw-text-white tw-outline-none tw-transition focus:tw-border-indigo-400 focus:tw-ring-4 focus:tw-ring-indigo-500/15 disabled:tw-cursor-not-allowed disabled:tw-opacity-60"
+                        disabled={isUploading}
+                        id="admin-dayasos-category"
+                        onChange={(event) => setSelectedDayasosCategory(event.target.value)}
+                        value={selectedDayasosCategory}
+                      >
+                        <option className="tw-bg-zinc-900" value="">
+                          Pilih kategori Dayasos
+                        </option>
+                        {dayasosCategoryOptions.map((category) => (
+                          <option className="tw-bg-zinc-900" key={category} value={category}>
+                            {category}
+                          </option>
+                        ))}
+                      </select>
+                      <ChevronDown
+                        className="tw-pointer-events-none tw-absolute tw-right-3.5 tw-top-1/2 -tw-translate-y-1/2 tw-text-slate-500"
+                        size={16}
+                      />
+                    </div>
+                    <p className="tw-mt-1.5 tw-text-xs tw-text-slate-500">
+                      Digunakan jika kolom jenis_kategori pada spreadsheet kosong.
+                    </p>
+                  </div>
+                )}
+
+                <div>
+                  <label
+                    className="tw-mb-2 tw-block tw-text-sm tw-font-medium tw-text-slate-200"
+                    htmlFor="admin-data-file"
+                  >
+                    File spreadsheet
+                  </label>
+                  <div className="tw-flex tw-min-h-[76px] tw-items-center tw-gap-3 tw-rounded-lg tw-border tw-border-slate-700 tw-bg-zinc-900 tw-p-3 tw-transition focus-within:tw-border-indigo-400 focus-within:tw-ring-4 focus-within:tw-ring-indigo-500/10">
+                    <div className="tw-flex tw-h-10 tw-w-10 tw-shrink-0 tw-items-center tw-justify-center tw-rounded-lg tw-bg-slate-800 tw-text-indigo-300">
+                      <FileSpreadsheet size={19} />
+                    </div>
+                    <div className="tw-min-w-0 tw-flex-1">
+                      {file ? (
+                        <>
+                          <p className="tw-truncate tw-text-sm tw-font-medium tw-text-slate-100">
+                            {file.name}
+                          </p>
+                          <p className="tw-mt-1 tw-text-xs tw-text-slate-500">
+                            {formatFileSize(file.size)}
+                          </p>
+                        </>
+                      ) : (
+                        <>
+                          <p className="tw-text-sm tw-font-medium tw-text-slate-200">
+                            Belum ada file dipilih
+                          </p>
+                          <p className="tw-mt-1 tw-text-xs tw-text-slate-500">
+                            Pilih file .csv, .xlsx, atau .xls dari perangkat
+                          </p>
+                        </>
+                      )}
+                    </div>
+                    <label
+                      className={`tw-inline-flex tw-shrink-0 tw-cursor-pointer tw-items-center tw-gap-2 tw-rounded-lg tw-border tw-border-slate-600 tw-bg-slate-800 tw-px-3 tw-py-2.5 tw-text-xs tw-font-medium tw-text-slate-200 tw-transition hover:tw-border-indigo-400/60 hover:tw-bg-slate-700 ${
+                        isUploading ? 'tw-pointer-events-none tw-opacity-50' : ''
+                      }`}
+                      htmlFor="admin-data-file"
+                    >
+                      <UploadCloud size={15} />
+                      {file ? 'Ganti file' : 'Pilih file'}
+                    </label>
+                    <input
+                      accept=".csv,.xlsx,.xls,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
+                      className="tw-sr-only"
+                      disabled={isUploading}
+                      id="admin-data-file"
+                      onChange={handleFileChange}
+                      ref={fileInputRef}
+                      type="file"
+                    />
+                  </div>
+                </div>
+
+                {notification && (
+                  <div
+                    className={`tw-flex tw-items-start tw-gap-2.5 tw-whitespace-pre-line tw-rounded-lg tw-border tw-p-3.5 tw-text-sm ${
+                      notification.type === 'success'
+                        ? 'tw-border-emerald-400/20 tw-bg-emerald-400/[0.07] tw-text-emerald-200'
+                        : 'tw-border-rose-400/20 tw-bg-rose-400/[0.07] tw-text-rose-200'
+                    }`}
+                    role={notification.type === 'error' ? 'alert' : 'status'}
+                  >
+                    <NotificationIcon className="tw-mt-0.5 tw-shrink-0" size={17} />
+                    <span>{notification.message}</span>
+                  </div>
+                )}
+
+                <button
+                  className="tw-inline-flex tw-w-full tw-items-center tw-justify-center tw-gap-2.5 tw-rounded-lg tw-bg-indigo-600 tw-px-5 tw-py-3 tw-text-sm tw-font-semibold tw-text-white tw-shadow-md tw-shadow-indigo-950/30 tw-transition-all tw-duration-200 hover:-tw-translate-y-0.5 hover:tw-bg-indigo-500 hover:tw-shadow-lg focus-visible:tw-outline-none focus-visible:tw-ring-4 focus-visible:tw-ring-indigo-400/30 disabled:tw-translate-y-0 disabled:tw-cursor-not-allowed disabled:tw-bg-slate-700 disabled:tw-text-slate-400 disabled:tw-shadow-none"
+                  disabled={isUploading}
+                  type="submit"
+                >
+                  {isUploading ? (
+                    <>
+                      <LoaderCircle className="tw-animate-spin" size={18} />
+                      Memproses dan menyimpan...
+                    </>
+                  ) : (
+                    <>
+                      <UploadCloud size={18} />
+                      Unggah ke Peta
+                    </>
+                  )}
+                </button>
+              </form>
+            </section>
+
+            <aside className="tw-space-y-5">
+              <section className="tw-rounded-xl tw-border tw-border-slate-700/80 tw-bg-slate-800 tw-p-5 tw-shadow-lg tw-shadow-black/20 sm:tw-p-6">
+                <div className="tw-flex tw-items-center tw-gap-3">
+                  <div className="tw-flex tw-h-10 tw-w-10 tw-shrink-0 tw-items-center tw-justify-center tw-rounded-lg tw-bg-sky-400/10 tw-text-sky-300">
+                    <Database size={18} />
+                  </div>
+                  <div>
+                    <h3 className="tw-font-semibold tw-text-white">Kolom yang dibutuhkan</h3>
+                    <p className="tw-mt-0.5 tw-text-xs tw-text-slate-400">
+                      Header umum wajib pada baris pertama sheet
+                    </p>
+                  </div>
+                </div>
+                <div className="tw-mt-5 tw-space-y-2">
+                  {['latitude', 'longitude', 'nama_lokasi'].map((column) => (
+                    <div
+                      className="tw-flex tw-items-center tw-justify-between tw-gap-3 tw-rounded-lg tw-border tw-border-slate-700/70 tw-bg-zinc-900/70 tw-px-3 tw-py-2.5"
+                      key={column}
+                    >
+                      <code className="tw-text-xs tw-text-slate-200">{column}</code>
+                      <span className="tw-rounded-md tw-bg-slate-700/70 tw-px-2 tw-py-1 tw-text-[10px] tw-font-medium tw-uppercase tw-tracking-wide tw-text-slate-400">
+                        Wajib
+                      </span>
+                    </div>
+                  ))}
+                </div>
+                <p className="tw-mt-4 tw-text-xs tw-leading-5 tw-text-slate-400">
+                  Tahun kegiatan diambil dari empat angka pertama; jika kosong, nilainya 2026.
+                  Kolom tambahan disimpan di <code className="tw-text-slate-300">detail_informasi</code>.
+                  Koordinat kosong atau di luar rentang akan ditolak.
+                </p>
+                <p className="tw-mt-3 tw-border-t tw-border-slate-700/80 tw-pt-3 tw-text-xs tw-leading-5 tw-text-slate-400">
+                  Format LKS Dayasos dari KoboToolbox juga didukung: koordinat
+                  <code className="tw-mx-1 tw-text-slate-300">_Lokasi LKS (Titik Koordinat)_latitude/longitude</code>,
+                  <code className="tw-mx-1 tw-text-slate-300">Nama LKS</code>,
+                  <code className="tw-mx-1 tw-text-slate-300">Alamat Lengkap</code>, dan
+                  <code className="tw-ml-1 tw-text-slate-300">Tahun Berdiri LKS</code>.
+                </p>
+              </section>
+
+              <section className="tw-rounded-xl tw-border tw-border-amber-300/15 tw-bg-slate-800 tw-p-5 tw-shadow-lg tw-shadow-black/20 sm:tw-p-6">
+                <div className="tw-flex tw-items-start tw-gap-3">
+                  <div className="tw-flex tw-h-10 tw-w-10 tw-shrink-0 tw-items-center tw-justify-center tw-rounded-lg tw-bg-amber-300/10 tw-text-amber-200">
+                    <LockKeyhole size={18} />
+                  </div>
+                  <div className="tw-min-w-0">
+                    <h3 className="tw-font-semibold tw-text-white">Akses dan keamanan</h3>
+                    <p className="tw-mt-1.5 tw-text-sm tw-leading-6 tw-text-slate-400">
+                      Batasi halaman ini untuk admin terautentikasi dan gunakan kebijakan RLS
+                      sebelum mengizinkan penulisan ke database.
+                    </p>
+                  </div>
+                </div>
+                <div className="tw-mt-4 tw-flex tw-items-center tw-gap-2 tw-border-t tw-border-slate-700/80 tw-pt-4 tw-text-xs tw-text-slate-400">
+                  <ShieldCheck className="tw-shrink-0 tw-text-emerald-400" size={15} />
+                  Data divalidasi sebelum disimpan di browser
+                </div>
+              </section>
+            </aside>
+          </section>
+        </div>
       </div>
-    </main>
+    </div>
   )
 }
 
