@@ -1,6 +1,10 @@
 
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
 
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
 * {
   margin: 0;
   padding: 0;
@@ -94,6 +98,159 @@ button {
 
 .menu-item.active {
   border-left: 3px solid #38a5ff;
+}
+
+.layer-manager {
+  margin: 22px 2px 0;
+  padding: 17px 12px 12px;
+  border: 1px solid #29445e;
+  border-radius: 12px;
+  background: linear-gradient(160deg, #19334d 0%, #142b42 100%);
+  box-shadow: 0 10px 24px #07152235, inset 0 1px #ffffff08;
+}
+
+.layer-manager-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 0 1px 14px;
+}
+
+.layer-manager-heading h3 {
+  color: #f3f7fb;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.layer-manager-heading p {
+  margin-top: 5px;
+  color: #91a8bd;
+  font-size: 10px;
+}
+
+.layer-count {
+  flex-shrink: 0;
+  padding: 4px 7px;
+  border: 1px solid #3a5873;
+  border-radius: 7px;
+  background: #203d57;
+  color: #b9d8f1;
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.layer-list {
+  display: grid;
+  gap: 6px;
+}
+
+.layer-item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 48px;
+  padding: 8px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  background: #ffffff06;
+  cursor: pointer;
+  transition: background 0.2s, border-color 0.2s;
+}
+
+.layer-item:hover {
+  border-color: #3a5873;
+  background: #ffffff0d;
+}
+
+.layer-item-info {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+}
+
+.layer-color {
+  width: 9px;
+  height: 28px;
+  flex-shrink: 0;
+  border-radius: 5px;
+  background: var(--layer-color);
+  box-shadow: 0 0 12px color-mix(in srgb, var(--layer-color) 38%, transparent);
+}
+
+.layer-item-copy {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.layer-name {
+  overflow: hidden;
+  color: #e3edf6;
+  font-size: 11px;
+  font-weight: 550;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.layer-state {
+  color: #86a1b9;
+  font-size: 9px;
+}
+
+.layer-toggle-input {
+  position: absolute;
+  right: 8px;
+  width: 34px;
+  height: 20px;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.layer-toggle {
+  position: relative;
+  width: 34px;
+  height: 20px;
+  flex-shrink: 0;
+  border: 1px solid #48627a;
+  border-radius: 20px;
+  background: #294057;
+  transition: background 0.2s, border-color 0.2s;
+}
+
+.layer-toggle::after {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #bdcbd8;
+  content: '';
+  transition: transform 0.2s, background 0.2s;
+}
+
+.layer-toggle-input:checked + .layer-toggle {
+  border-color: #37a9da;
+  background: #1677a5;
+}
+
+.layer-toggle-input:checked + .layer-toggle::after {
+  transform: translateX(14px);
+  background: #ffffff;
+}
+
+.layer-toggle-input:focus-visible + .layer-toggle {
+  outline: 2px solid #83d6ff;
+  outline-offset: 3px;
+}
+
+.layer-toggle-input:not(:checked) ~ .layer-item-info .layer-state {
+  color: #71879a;
 }
 
 .sidebar-bottom {
@@ -273,6 +430,32 @@ button {
   z-index: 1;
 }
 
+.leaflet-tooltip.village-label {
+  max-width: 100px;
+  padding: 2px 4px;
+  border: 1px solid #0f172a30;
+  border-radius: 4px;
+  background: #ffffffd9;
+  box-shadow: none;
+  color: #0f172a;
+  font-size: 9px;
+  font-weight: 600;
+  line-height: 1.15;
+  text-align: center;
+  white-space: normal;
+}
+
+.leaflet-tooltip.village-label::before {
+  display: none;
+}
+
+.village-label-content small {
+  display: block;
+  color: #475569;
+  font-size: 7px;
+  font-weight: 500;
+}
+
 /* MAP LEGEND */
 
 .map-legend {
@@ -369,6 +552,36 @@ button {
     padding: 13px 5px;
   }
 
+  .sidebar-layer-open {
+    width: min(255px, 72vw);
+    padding: 20px 12px;
+  }
+
+  .sidebar-layer-open .brand {
+    justify-content: flex-start;
+  }
+
+  .sidebar-layer-open .brand > div:last-child,
+  .sidebar-layer-open .section-label,
+  .sidebar-layer-open .menu-item span,
+  .sidebar-layer-open .sidebar-bottom span {
+    display: block;
+  }
+
+  .sidebar-layer-open .menu-item span,
+  .sidebar-layer-open .sidebar-bottom span {
+    display: inline;
+  }
+
+  .sidebar-layer-open .menu-item {
+    justify-content: flex-start;
+    padding: 13px;
+  }
+
+  .sidebar-layer-open .layer-manager {
+    margin-top: 18px;
+  }
+
   .statistics {
     grid-template-columns: 1fr;
   }
@@ -396,6 +609,11 @@ button {
   .sidebar {
     width: 60px;
     padding: 15px 6px;
+  }
+
+  .sidebar-layer-open {
+    width: min(255px, 74vw);
+    padding: 15px 10px;
   }
 
   .brand-icon {
