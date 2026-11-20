@@ -1,7 +1,8 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 import {
   MapContainer,
+  useMap,
   LayersControl,
   TileLayer,
   GeoJSON,
@@ -11,16 +12,24 @@ import {
   ScaleControl
 } from 'react-leaflet';
 
+import { control, divIcon, DomEvent, DomUtil } from 'leaflet';
+
 import {
-  Map,
+  Map as MapIcon,
   LayoutDashboard,
   Layers,
   MapPin,
   Info,
   Maximize2,
-  Search
+  Search,
+  Download,
+  Printer,
+  LogIn,
+  LogOut,
+  X
 } from 'lucide-react';
 
+import Papa from 'papaparse';
 import 'leaflet/dist/leaflet.css';
 import './index.css';
 import AdminDashboard from './AdminDashboard.jsx';
@@ -117,16 +126,18 @@ const maskGeoJSON = difference({
 });
 
 const bidangMenus = [
-  { id: 'dayasos', name: 'Bidang Dayasos', color: '#58c4a5' },
-  { id: 'rehsos', name: 'Bidang Rehsos', color: '#72a7ff' },
-  { id: 'uptd-ppa', name: 'UPTD PPA', color: '#f08c9b' },
-  { id: 'khp2ha', name: 'Bidang KHP2HA', color: '#bd9cff' },
-  { id: 'p3a', name: 'Bidang P3A', color: '#f2bd68' },
-  { id: 'pskb', name: 'Bidang PSKB', color: '#70c8d8' }
+  { id: 'dayasos', name: 'Bidang Dayasos', color: '#3b82f6' },
+  { id: 'rehsos', name: 'Bidang Rehsos', color: '#10b981' },
+  { id: 'uptd-ppa', name: 'UPTD PPA', color: '#f43f5e' },
+  { id: 'khp2ha', name: 'Bidang KHP2HA', color: '#06b6d4' },
+  { id: 'p3a', name: 'Bidang P3A', color: '#a855f7' },
+  { id: 'pskb', name: 'Bidang PSKB', color: '#f59e0b' }
 ];
 
-const statisticIcons = [MapPin, Layers, Map];
+const statisticIcons = [MapPin, Layers, MapIcon];
 const dayasosCategories = ['LKS', 'TKSK', 'KAT', 'LK3', 'TMP'];
+const MAP_INITIAL_CENTER = [-8.65, 119.9];
+const MAP_INITIAL_ZOOM = 10;
 
 function normalizeIdentifier(value) {
   return String(value).toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -154,6 +165,12 @@ function getLocationField(location, fieldName, ...aliases) {
     return String(value).trim();
   }
   return getLocationDetail(location, fieldName, ...aliases);
+}
+
+function getFirstLocationField(location, ...fieldNames) {
+  return fieldNames
+    .map((fieldName) => getLocationField(location, fieldName))
+    .find((value) => value !== '—') ?? '—';
 }
 
 function getLocationStatus(location) {
@@ -269,6 +286,116 @@ function belongsToBidang(location, bidangId) {
   return bidang === selectedBidang;
 }
 
+function getPercentageCategories(menuId, locations) {
+  if (menuId === 'dayasos') {
+    return dayasosCategories;
+  }
+
+  const categories = new Set();
+  locations.forEach((location) => {
+    const jenisKategori = String(location.jenis_kategori ?? '').trim();
+    const locationCategories = jenisKategori
+      ? [jenisKategori]
+      : getLocationCategories(location, menuId);
+    locationCategories.forEach((category) => categories.add(category));
+  });
+  return [...categories];
+}
+
+function getPercentageLocationCategories(location, menuId) {
+  const jenisKategori = String(location.jenis_kategori ?? '').trim();
+  return menuId !== 'dayasos' && jenisKategori
+    ? [jenisKategori]
+    : getLocationCategories(location, menuId);
+}
+
+function formatPercentage(count, total) {
+  return total > 0 ? `${((count / total) * 100).toFixed(1)}%` : '0%';
+}
+
+function getLocationSearchText(location) {
+  const fields = [
+    location.nama_item,
+    location.nama_lokasi,
+    location.nama_lembaga_kegiatan,
+    location.nama_program,
+    location.program,
+    location.nama_desa,
+    location.desa,
+    location.kelurahan,
+    location.nama_kecamatan,
+    location.kecamatan,
+    ...Object.values(getLocationDetails(location))
+  ];
+  return fields
+    .filter((value) => value !== null && value !== undefined)
+    .map(String)
+    .join(' ')
+    .toLocaleLowerCase('id');
+}
+
+function MapFlyToController({ searchSelection, tableSelection, markerRefs }) {
+  const map = useMap();
+
+  useEffect(() => {
+    const location = searchSelection?.location;
+    if (!location) {
+      return;
+    }
+
+    map.flyTo([Number(location.latitude), Number(location.longitude)], 16);
+  }, [map, searchSelection]);
+
+  useEffect(() => {
+    const location = tableSelection?.location;
+    if (!location) {
+      return;
+    }
+
+    const latitude = Number(location.latitude);
+    const longitude = Number(location.longitude);
+    if (
+      !Number.isFinite(latitude) ||
+      latitude < -90 ||
+      latitude > 90 ||
+      !Number.isFinite(longitude) ||
+      longitude < -180 ||
+      longitude > 180
+    ) {
+      return;
+    }
+
+    map.flyTo([latitude, longitude], 16);
+    markerRefs.current.get(location)?.openPopup();
+  }, [map, tableSelection, markerRefs]);
+
+  return null;
+}
+
+function MapHomeControl() {
+  const map = useMap();
+
+  useEffect(() => {
+    const homeControl = control({ position: 'topleft' });
+    homeControl.onAdd = () => {
+      const container = DomUtil.create('div', 'leaflet-bar leaflet-control map-home-control');
+      const button = DomUtil.create('button', 'map-home-button', container);
+      button.type = 'button';
+      button.title = 'Kembalikan tampilan peta';
+      button.setAttribute('aria-label', 'Kembalikan tampilan peta ke Manggarai Barat');
+      button.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m3 10 9-7 9 7v10a1 1 0 0 1-1 1h-6v-7h-4v7H4a1 1 0 0 1-1-1z"/></svg>';
+      DomEvent.disableClickPropagation(container);
+      DomEvent.on(button, 'click', () => map.flyTo(MAP_INITIAL_CENTER, MAP_INITIAL_ZOOM));
+      return container;
+    };
+
+    homeControl.addTo(map);
+    return () => homeControl.remove();
+  }, [map]);
+
+  return null;
+}
+
 // ATURAN WARNA SETIAP POLIGON
 function styleFeature(feature, selectedKecamatan) {
   const parentCode = feature.properties.parent_code;
@@ -314,15 +441,52 @@ function onEachVillage(feature, layer) {
 
 function App() {
   const [activeMenu, setActiveMenu] = useState('peta-utama');
+  const [isAdmin, setIsAdmin] = useState(
+    () => window.localStorage.getItem('web-gis-is-admin') === 'true'
+  );
+  const [showLoginModal, setShowLoginModal] = useState(false);
+  const [loginEmail, setLoginEmail] = useState('');
+  const [loginPassword, setLoginPassword] = useState('');
+  const [loginError, setLoginError] = useState('');
+  const isLoginModalOpen =
+    showLoginModal || (activeMenu === 'dashboard-admin' && !isAdmin);
   const [selectedKecamatan, setSelectedKecamatan] = useState(null);
+  const [selectedYear, setSelectedYear] = useState('all');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [isSearchResultsOpen, setIsSearchResultsOpen] = useState(false);
+  const [searchSelection, setSearchSelection] = useState(null);
   const [mapLocations, setMapLocations] = useState([]);
   const [isLoadingLocations, setIsLoadingLocations] = useState(true);
   const [mapDataError, setMapDataError] = useState('');
   const [enabledLayers, setEnabledLayers] = useState({});
+  const [hasAgencyLogo, setHasAgencyLogo] = useState(true);
+  const markerRefs = useRef(new Map());
+  const tableSelectionId = useRef(0);
+  const [tableSelection, setTableSelection] = useState(null);
+  const yearFilteredLocations = selectedYear === 'all'
+    ? mapLocations
+    : mapLocations.filter((location) =>
+        String(location.tahun_kegiatan ?? '').trim() === selectedYear
+      );
+  const searchResults = searchQuery.trim()
+    ? yearFilteredLocations.filter((location) => {
+        const latitude = Number(location.latitude);
+        const longitude = Number(location.longitude);
+        return (
+          Number.isFinite(latitude) &&
+          latitude >= -90 &&
+          latitude <= 90 &&
+          Number.isFinite(longitude) &&
+          longitude >= -180 &&
+          longitude <= 180 &&
+          getLocationSearchText(location).includes(searchQuery.trim().toLocaleLowerCase('id'))
+        );
+      }).slice(0, 6)
+    : [];
   const activeBidang = bidangMenus.find(({ id }) => id === activeMenu);
   const bidangLocations = activeBidang
-    ? mapLocations.filter((location) => belongsToBidang(location, activeBidang.id))
-    : mapLocations;
+    ? yearFilteredLocations.filter((location) => belongsToBidang(location, activeBidang.id))
+    : yearFilteredLocations;
   const layerCategories = activeBidang
     ? getLayerCategories(activeBidang.id, bidangLocations)
     : [];
@@ -332,14 +496,79 @@ function App() {
           enabledLayers[`${activeBidang.id}:${normalizeIdentifier(category)}`] !== false
         )
       )
-    : mapLocations;
+    : yearFilteredLocations;
   const activeLayerCount = layerCategories.filter((category) =>
     enabledLayers[`${activeMenu}:${normalizeIdentifier(category)}`] !== false
   ).length;
+  const percentageCards = activeBidang
+    ? getPercentageCategories(activeBidang.id, bidangLocations).map((category) => {
+        const categoryLocations = bidangLocations.filter((location) =>
+          getPercentageLocationCategories(location, activeBidang.id).some(
+            (locationCategory) =>
+              normalizeIdentifier(locationCategory) === normalizeIdentifier(category)
+          )
+        );
+        return {
+          key: category,
+          label: category === 'LKS' ? 'Lembaga (LKS)' : category,
+          count: categoryLocations.length,
+          percentage: formatPercentage(categoryLocations.length, bidangLocations.length),
+          color: activeBidang.color
+        };
+      })
+    : bidangMenus.map((bidang) => {
+      const count = yearFilteredLocations.filter((location) =>
+          belongsToBidang(location, bidang.id)
+        ).length;
+        return {
+          key: bidang.id,
+          label: bidang.name.replace(/^Bidang /, ''),
+          count,
+          percentage: formatPercentage(count, yearFilteredLocations.length),
+          color: bidang.color
+        };
+      });
+
+  function openLoginModal() {
+    setLoginError('');
+    setShowLoginModal(true);
+  }
+
+  function closeLoginModal() {
+    setShowLoginModal(false);
+    if (!isAdmin && activeMenu === 'dashboard-admin') {
+      setActiveMenu('peta-utama');
+    }
+  }
+
+  function handleLogin(event) {
+    event.preventDefault();
+    if (
+      loginEmail.trim() !== 'admin@dinsos.go.id' ||
+      loginPassword !== 'admin123'
+    ) {
+      setLoginError('Email atau password tidak sesuai.');
+      return;
+    }
+
+    window.localStorage.setItem('web-gis-is-admin', 'true');
+    setIsAdmin(true);
+    setActiveMenu('dashboard-admin');
+    setShowLoginModal(false);
+    setLoginEmail('');
+    setLoginPassword('');
+    setLoginError('');
+  }
+
+  function handleLogout() {
+    window.localStorage.removeItem('web-gis-is-admin');
+    setIsAdmin(false);
+    setActiveMenu('peta-utama');
+  }
 
   const statistics = activeMenu === 'peta-utama'
     ? [
-        { label: 'Lokasi Terdata', value: `${mapLocations.length} Lokasi` },
+        { label: 'Lokasi Terdata', value: `${yearFilteredLocations.length} Lokasi` },
         { label: 'Wilayah Administratif', value: `${allFeatures.length} Desa` },
         { label: 'Bidang Tersedia', value: `${bidangMenus.length} Bidang` }
       ]
@@ -370,6 +599,28 @@ function App() {
             ) || '—'}`
           }
         ];
+
+  function downloadFilteredCsv() {
+    const csv = Papa.unparse(visibleLocations);
+    const bidangSlug = activeBidang
+      ? activeBidang.name.replace(/^Bidang\s+/, '').replace(/[^a-z0-9]+/gi, '_')
+      : 'Semua_Bidang';
+    const yearSlug = selectedYear === 'all' ? 'Semua_Tahun' : selectedYear;
+    const blob = new Blob(['\uFEFF', csv], { type: 'text/csv;charset=utf-8;' });
+    const downloadUrl = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+
+    link.href = downloadUrl;
+    link.download = `Rekap_Data_Dinsos_Mabar_${bidangSlug}_${yearSlug}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(downloadUrl), 0);
+  }
+
+  function printReport() {
+    window.print();
+  }
 
   useEffect(() => {
     function loadCsvDatasets() {
@@ -440,8 +691,27 @@ function App() {
       const status = activeMenu === 'uptd-ppa' ? getLocationStatus(location) : null;
       const locationName = location.nama_item || location.nama_lokasi || 'Nama lokasi tidak tersedia';
       const popupTitle = getLocationField(location, 'nama_lembaga_kegiatan');
+      const markerColor = bidangMenus.find((bidang) =>
+        belongsToBidang(location, bidang.id)
+      )?.color ?? '#94a3b8';
       return [
-        <Marker key={`${locationName}-${latitude}-${longitude}-${index}`} position={[latitude, longitude]}>
+        <Marker
+          key={`${locationName}-${latitude}-${longitude}-${index}`}
+          ref={(marker) => {
+            if (marker) {
+              markerRefs.current.set(location, marker);
+            } else {
+              markerRefs.current.delete(location);
+            }
+          }}
+          position={[latitude, longitude]}
+          icon={divIcon({
+            className: 'field-marker-icon',
+            html: `<span class="field-marker-dot" style="--marker-color:${markerColor}"></span>`,
+            iconSize: [18, 18],
+            iconAnchor: [9, 9]
+          })}
+        >
           <Tooltip
             permanent={true}
             direction="top"
@@ -498,8 +768,10 @@ function App() {
   }
 
   const menus = [
-    { id: 'peta-utama', name: 'Peta Utama', icon: Map },
-    { id: 'dashboard-admin', name: 'Dashboard Admin', icon: LayoutDashboard },
+    { id: 'peta-utama', name: 'Peta Utama', icon: MapIcon },
+    ...(isAdmin
+      ? [{ id: 'dashboard-admin', name: 'Dashboard Admin', icon: LayoutDashboard }]
+      : []),
     ...bidangMenus.map((bidang) => ({ ...bidang, icon: MapPin }))
   ];
 
@@ -510,13 +782,31 @@ function App() {
       <aside className="sidebar">
 
         <div className="brand">
-          <div className="brand-icon">
-            <Map size={26} />
+          <div className="tw-flex tw-h-10 tw-w-10 tw-shrink-0 tw-items-center tw-justify-center">
+            {hasAgencyLogo ? (
+              <img
+                src="/logo-mabar.png"
+                alt="Logo Kabupaten Manggarai Barat"
+                className="tw-h-10 tw-w-10 tw-object-contain"
+                onError={() => setHasAgencyLogo(false)}
+              />
+            ) : (
+              <MapPin
+                size={24}
+                strokeWidth={2.5}
+                className="tw-text-cyan-300 tw-drop-shadow-[0_0_8px_rgba(34,211,238,0.9)]"
+                aria-hidden="true"
+              />
+            )}
           </div>
 
-          <div>
-            <h2>WEB GIS</h2>
-            <span>MANGGARAI BARAT</span>
+          <div className="tw-min-w-0">
+            <h2 className="tw-text-xs tw-font-extrabold tw-leading-tight tw-tracking-wider tw-text-slate-100">
+              PIN DINSOSP3A
+            </h2>
+            <span className="tw-mt-1 tw-block tw-text-[10px] tw-font-medium tw-text-slate-400">
+              Kab. Manggarai Barat
+            </span>
           </div>
         </div>
 
@@ -530,10 +820,16 @@ function App() {
               <button
                 key={item.name}
                 className={`menu-item ${activeMenu === item.id ? 'active' : ''}`}
-                onClick={() => setActiveMenu(item.id)}
+                onClick={() => {
+                  if (item.id === 'dashboard-admin' && !isAdmin) {
+                    openLoginModal();
+                    return;
+                  }
+                  setActiveMenu(item.id);
+                }}
                 aria-current={activeMenu === item.id ? 'page' : undefined}
               >
-                <Icon size={19} />
+                <Icon size={19} style={item.color ? { color: item.color } : undefined} />
                 <span>{item.name}</span>
               </button>
             );
@@ -541,8 +837,33 @@ function App() {
         </div>
 
         <div className="sidebar-bottom">
-          <span className="status-indicator"></span>
-          <span>Sistem Pemetaan Aktif</span>
+          <div className="tw-flex tw-items-center tw-gap-2">
+            <span className="status-indicator"></span>
+            <span>Sistem Pemetaan Aktif</span>
+          </div>
+          {isAdmin ? (
+            <button
+              type="button"
+              onClick={handleLogout}
+              className="tw-flex tw-items-center tw-gap-2 tw-rounded-lg tw-border tw-border-slate-600 tw-bg-slate-800 tw-px-3 tw-py-2 tw-text-xs tw-font-semibold tw-text-slate-200 hover:tw-bg-slate-700"
+              aria-label="Logout"
+              title="Logout"
+            >
+              <LogOut size={15} />
+              <span>Logout</span>
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={openLoginModal}
+              className="tw-flex tw-items-center tw-gap-2 tw-rounded-lg tw-border tw-border-sky-500/40 tw-bg-sky-500/10 tw-px-3 tw-py-2 tw-text-xs tw-font-semibold tw-text-sky-200 hover:tw-bg-sky-500/20"
+              aria-label="Login Admin"
+              title="Login Admin"
+            >
+              <LogIn size={15} />
+              <span>Login Admin</span>
+            </button>
+          )}
         </div>
 
       </aside>
@@ -550,24 +871,43 @@ function App() {
       {/* MAIN CONTENT */}
       <main className="main-content">
 
+        <div
+          className="topbar-announcement tw-w-full tw-overflow-hidden"
+          aria-label="Selamat Datang di PIN DINSOSP3A (Peta Informasi Navigasi Dinas Sosial Pemberdayaan Perempuan dan Perlindungan Anak Kab. Manggarai Barat)"
+        >
+          <div
+            className="announcement-track hover:tw-[animation-play-state:paused]"
+            aria-hidden="true"
+          >
+            <span className="tw-inline-block tw-min-w-max tw-whitespace-nowrap">
+              Selamat Datang di PIN DINSOSP3A (Peta Informasi Navigasi Dinas Sosial Pemberdayaan Perempuan dan Perlindungan Anak Kab. Manggarai Barat)
+            </span>
+          </div>
+        </div>
+
         {/* HEADER */}
         <header className="topbar">
+          <div className="topbar-heading">
+            <div className="tw-min-w-0">
+              <h1 className="tw-text-lg tw-font-extrabold tw-leading-tight tw-tracking-wide tw-text-white sm:tw-text-2xl">
+                PIN DINSOSP3A
+              </h1>
+              <p className="tw-mt-1 tw-max-w-3xl tw-text-xs tw-leading-relaxed tw-text-slate-400 sm:tw-text-sm">
+                Peta Informasi Navigasi Dinas Sosial Pemberdayaan Perempuan dan Perlindungan Anak Kab. Manggarai Barat
+              </p>
+            </div>
 
-          <div>
-            <h1>Web GIS Kabupaten Manggarai Barat</h1>
-            <p>Geographic Information System</p>
-          </div>
-
-          <div className="topbar-right">
-            <span className="online-status">
-              ● Online
-            </span>
+            <div className="topbar-right">
+              <span className="online-status">
+                ● Online
+              </span>
+            </div>
           </div>
 
         </header>
 
         {/* CONTENT */}
-        {activeMenu === 'dashboard-admin' ? (
+        {activeMenu === 'dashboard-admin' && isAdmin ? (
           <AdminDashboard />
         ) : (
         <section className="content-area">
@@ -589,10 +929,20 @@ function App() {
             {statistics.map((statistic, index) => {
               const Icon = statisticIcons[index];
               return (
-                <div className="stat-card" key={statistic.label}>
-                <div className={`stat-icon ${['blue', 'green', 'orange'][index]}`}>
-                  <Icon size={23} />
-                </div>
+                <div
+                  className="stat-card"
+                  key={statistic.label}
+                  style={activeBidang ? { borderTop: `3px solid ${activeBidang.color}` } : undefined}
+                >
+                  <div
+                    className={`stat-icon ${['blue', 'green', 'orange'][index]}`}
+                    style={activeBidang ? {
+                      backgroundColor: `${activeBidang.color}22`,
+                      color: activeBidang.color
+                    } : undefined}
+                  >
+                    <Icon size={23} />
+                  </div>
                   <div>
                     <span>{statistic.label}</span>
                     <h3>{statistic.value}</h3>
@@ -602,6 +952,64 @@ function App() {
             })}
 
           </div>
+
+          {/* VISUAL PERCENTAGE CARDS */}
+          <section className="percentage-summary tw-mb-6" aria-labelledby="percentage-cards-title">
+            <div className="tw-mb-3">
+              <h3 id="percentage-cards-title" className="tw-text-sm tw-font-semibold tw-text-slate-200">
+                {activeBidang ? `Rincian ${activeBidang.name}` : 'Persentase Data per Bidang'}
+              </h3>
+              <p className="tw-mt-1 tw-text-xs tw-text-slate-400">
+                {activeBidang
+                  ? `Proporsi kategori dari ${bidangLocations.length} lokasi ${activeBidang.name}.`
+                  : `Proporsi setiap bidang dari ${yearFilteredLocations.length} lokasi terdata.`}
+              </p>
+            </div>
+            {percentageCards.length > 0 ? (
+              <div className="tw-grid tw-grid-cols-2 md:tw-grid-cols-3 lg:tw-grid-cols-6 tw-gap-4">
+                {percentageCards.map((card) => (
+                  <article
+                    className="tw-rounded-xl tw-border tw-border-slate-700 tw-bg-slate-800/90 tw-p-4"
+                    key={card.key}
+                    style={{ borderTopWidth: 3, borderTopColor: card.color }}
+                  >
+                    <h4 className="tw-truncate tw-text-xs tw-font-medium tw-text-slate-300">
+                      {card.label}
+                    </h4>
+                    <p
+                      className="tw-mt-3 tw-text-3xl tw-font-bold tw-tracking-tight"
+                      style={{ color: card.color }}
+                    >
+                      {card.percentage}
+                    </p>
+                    <p className="tw-mt-1 tw-text-xs tw-text-slate-400">
+                      {card.count} Lokasi
+                    </p>
+                    <div
+                      className="tw-mt-4 tw-h-1.5 tw-overflow-hidden tw-rounded-full tw-bg-slate-700"
+                      role="progressbar"
+                      aria-label={`Persentase ${card.label}`}
+                      aria-valuemin={0}
+                      aria-valuemax={100}
+                      aria-valuenow={Number.parseFloat(card.percentage) || 0}
+                    >
+                      <div
+                        className="tw-h-full tw-rounded-full tw-transition-all"
+                        style={{
+                          width: card.percentage,
+                          backgroundColor: card.color
+                        }}
+                      />
+                    </div>
+                  </article>
+                ))}
+              </div>
+            ) : (
+              <p className="tw-rounded-xl tw-border tw-border-slate-700 tw-bg-slate-800/90 tw-p-4 tw-text-sm tw-text-slate-400">
+                Belum ada rincian kategori untuk bidang ini.
+              </p>
+            )}
+          </section>
 
           {/* MAP CARD */}
           <div className="map-card">
@@ -617,30 +1025,138 @@ function App() {
                 </span>
               </div>
 
-              <button
-                className="map-action"
-                onClick={() => window.open(
-                  'https://www.arcgis.com/apps/mapviewer/',
-                  '_blank'
-                )}
-              >
-                <Maximize2 size={17} />
-                <span>Map Viewer</span>
-              </button>
+              <div className="map-header-actions print-hide">
+                <button
+                  type="button"
+                  className="map-action"
+                  onClick={() => window.open(
+                    'https://www.arcgis.com/apps/mapviewer/',
+                    '_blank'
+                  )}
+                >
+                  <Maximize2 size={17} />
+                  <span>Map Viewer</span>
+                </button>
+                <button
+                  type="button"
+                  className="map-action report-action"
+                  onClick={downloadFilteredCsv}
+                >
+                  <Download size={16} />
+                  <span>Unduh Rekap (CSV)</span>
+                </button>
+                <button
+                  type="button"
+                  className="map-action report-action"
+                  onClick={printReport}
+                >
+                  <Printer size={16} />
+                  <span>Cetak Laporan</span>
+                </button>
+              </div>
 
+            </div>
+
+            <div className="map-filter-bar tw-flex tw-flex-col tw-gap-3 tw-border-y tw-border-slate-700 tw-bg-slate-900/60 tw-p-4 sm:tw-flex-row sm:tw-items-start">
+              <div className="tw-relative tw-min-w-0 tw-flex-1">
+                <label htmlFor="map-location-search" className="tw-sr-only">
+                  Cari nama LKS, program, atau desa
+                </label>
+                <div className="tw-flex tw-items-center tw-gap-2 tw-rounded-lg tw-border tw-border-slate-700 tw-bg-slate-950 tw-px-3 tw-text-slate-400 focus-within:tw-border-sky-500 focus-within:tw-ring-2 focus-within:tw-ring-sky-500/20">
+                  <Search size={17} aria-hidden="true" />
+                  <input
+                    id="map-location-search"
+                    type="search"
+                    value={searchQuery}
+                    onChange={(event) => {
+                      setSearchQuery(event.target.value);
+                      setIsSearchResultsOpen(true);
+                      setSearchSelection(null);
+                    }}
+                    onFocus={() => setIsSearchResultsOpen(true)}
+                    onBlur={() => setIsSearchResultsOpen(false)}
+                    placeholder="Cari nama LKS, program, atau desa..."
+                    autoComplete="off"
+                    className="tw-min-w-0 tw-flex-1 tw-bg-transparent tw-py-2.5 tw-text-sm tw-text-white tw-outline-none placeholder:tw-text-slate-500"
+                  />
+                </div>
+                {isSearchResultsOpen && searchQuery.trim() && (
+                  <ul className="tw-absolute tw-inset-x-0 tw-top-full tw-z-[1000] tw-mt-1 tw-max-h-64 tw-overflow-y-auto tw-rounded-lg tw-border tw-border-slate-700 tw-bg-slate-900 tw-py-1 tw-shadow-xl">
+                    {searchResults.length > 0 ? searchResults.map((location, index) => {
+                      const locationName = location.nama_item ||
+                        location.nama_lokasi ||
+                        getLocationField(location, 'nama_lembaga_kegiatan');
+                      const villageName = getLocationField(location, 'nama_desa', 'desa', 'kelurahan');
+                      return (
+                        <li key={`${locationName}-${location.latitude}-${location.longitude}-${index}`}>
+                          <button
+                            type="button"
+                            onMouseDown={(event) => event.preventDefault()}
+                            onClick={() => {
+                              setSearchSelection({ location });
+                              setIsSearchResultsOpen(false);
+                            }}
+                            className="tw-flex tw-w-full tw-flex-col tw-items-start tw-px-3 tw-py-2 tw-text-left hover:tw-bg-slate-800 focus:tw-bg-slate-800 focus:tw-outline-none"
+                          >
+                            <span className="tw-text-sm tw-font-medium tw-text-slate-100">
+                              {locationName !== '—' ? locationName : 'Nama lokasi tidak tersedia'}
+                            </span>
+                            <span className="tw-mt-0.5 tw-text-xs tw-text-slate-400">
+                              {[villageName !== '—' ? villageName : '', location.tahun_kegiatan]
+                                .filter(Boolean)
+                                .join(' · ')}
+                            </span>
+                          </button>
+                        </li>
+                      );
+                    }) : (
+                      <li className="tw-px-3 tw-py-2 tw-text-sm tw-text-slate-400">
+                        Tidak ada lokasi yang cocok.
+                      </li>
+                    )}
+                  </ul>
+                )}
+              </div>
+              <div className="tw-flex tw-items-center tw-gap-2 sm:tw-w-auto">
+                <label htmlFor="map-year-filter" className="tw-whitespace-nowrap tw-text-xs tw-font-medium tw-text-slate-300">
+                  Tahun anggaran
+                </label>
+                <select
+                  id="map-year-filter"
+                  value={selectedYear}
+                  onChange={(event) => setSelectedYear(event.target.value)}
+                  className="tw-min-w-0 tw-flex-1 tw-rounded-lg tw-border tw-border-slate-700 tw-bg-slate-950 tw-px-3 tw-py-2.5 tw-text-sm tw-text-slate-100 tw-outline-none focus:tw-border-sky-500 focus:tw-ring-2 focus:tw-ring-sky-500/20 sm:tw-flex-none"
+                >
+                  <option value="all">Semua Tahun</option>
+                  <option value="2026">2026</option>
+                  <option value="2025">2025</option>
+                  <option value="2024">2024</option>
+                </select>
+              </div>
             </div>
 
             {/* INTERACTIVE MAP */}
             <div className="map-wrapper">
 
               <MapContainer
-                center={[-8.65, 119.9]}
-                zoom={9}
-                minZoom={7}
+                center={MAP_INITIAL_CENTER}
+                zoom={MAP_INITIAL_ZOOM}
+                minZoom={10}
                 maxZoom={18}
+                dragging={true}
+                zoomControl={true}
                 scrollWheelZoom={true}
+                maxBounds={[[-9.15, 119.25], [-8.15, 120.55]]}
+                maxBoundsViscosity={1.0}
                 className="leaflet-map"
               >
+
+                <MapFlyToController
+                  searchSelection={searchSelection}
+                  tableSelection={tableSelection}
+                  markerRefs={markerRefs}
+                />
+                <MapHomeControl />
 
                 <LayersControl position="topright">
                   <LayersControl.BaseLayer name="Peta Jalan">
@@ -779,6 +1295,132 @@ function App() {
 
           </div>
 
+          <section className="summary-table-card" aria-labelledby="summary-table-title">
+            <div className="summary-table-heading">
+              <div>
+                <h3 id="summary-table-title">Ringkasan Data Lokasi</h3>
+                <p>
+                  {activeBidang?.name ?? 'Seluruh Bidang'}
+                  {' · '}
+                  {selectedYear === 'all' ? 'Semua Tahun' : selectedYear}
+                </p>
+              </div>
+              <span className="summary-table-count">{visibleLocations.length} data</span>
+            </div>
+            <div className="summary-table-scroll">
+              <table className="summary-data-table">
+                <thead>
+                  <tr>
+                    <th scope="col">No</th>
+                    <th scope="col">Nama Lembaga / Kegiatan</th>
+                    <th scope="col">Bidang</th>
+                    <th scope="col">Kategori</th>
+                    <th scope="col">Lokasi</th>
+                    <th scope="col">Tahun</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {visibleLocations.map((location, index) => {
+                    const latitude = Number(location.latitude);
+                    const longitude = Number(location.longitude);
+                    const canFocusMap =
+                      Number.isFinite(latitude) &&
+                      latitude >= -90 &&
+                      latitude <= 90 &&
+                      Number.isFinite(longitude) &&
+                      longitude >= -180 &&
+                      longitude <= 180;
+                    const name = getFirstLocationField(
+                      location,
+                      'nama_lembaga_kegiatan',
+                      'nama_item',
+                      'nama_lokasi',
+                      'nama_program',
+                      'program'
+                    );
+
+                    return (
+                      <tr
+                        key={`${name}-${latitude}-${longitude}-${index}`}
+                        className={canFocusMap ? 'summary-data-row' : 'summary-data-row is-unmapped'}
+                        tabIndex={canFocusMap ? 0 : -1}
+                        aria-label={canFocusMap ? `Fokus peta pada ${name}` : undefined}
+                        aria-disabled={!canFocusMap}
+                        title={canFocusMap ? 'Klik untuk melihat lokasi pada peta' : 'Data ini tidak memiliki koordinat peta'}
+                        onClick={() => {
+                          if (canFocusMap) {
+                            setTableSelection({
+                              location,
+                              id: ++tableSelectionId.current
+                            });
+                          }
+                        }}
+                        onKeyDown={(event) => {
+                          if (canFocusMap && (event.key === 'Enter' || event.key === ' ')) {
+                            event.preventDefault();
+                            setTableSelection({
+                              location,
+                              id: ++tableSelectionId.current
+                            });
+                          }
+                        }}
+                      >
+                        <td>{index + 1}</td>
+                        <td>{name}</td>
+                        <td>{getLocationField(location, 'nama_bidang')}</td>
+                        <td>{getFirstLocationField(location, 'jenis_kategori', 'kategori')}</td>
+                        <td>{getFirstLocationField(location, 'nama_lokasi', 'nama_desa', 'desa', 'kelurahan')}</td>
+                        <td>{getLocationField(location, 'tahun_kegiatan')}</td>
+                      </tr>
+                    );
+                  })}
+                  {visibleLocations.length === 0 && (
+                    <tr>
+                      <td colSpan="6" className="summary-table-empty">
+                        {isLoadingLocations
+                          ? 'Memuat data lokasi...'
+                          : mapDataError
+                            ? `Data tidak dapat dimuat: ${mapDataError}`
+                            : 'Belum ada data untuk filter yang dipilih.'}
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          <section className="print-summary report-print-only" aria-labelledby="print-summary-title">
+            <h3 id="print-summary-title">
+              Ringkasan Data {activeBidang?.name ?? 'Seluruh Bidang'}
+              {' · '}
+              {selectedYear === 'all' ? 'Semua Tahun' : selectedYear}
+            </h3>
+            <table>
+              <thead>
+                <tr>
+                  <th scope="col">Kategori</th>
+                  <th scope="col">Jumlah Lokasi</th>
+                  <th scope="col">Persentase</th>
+                </tr>
+              </thead>
+              <tbody>
+                {percentageCards.map((card) => (
+                  <tr key={card.key}>
+                    <td>{card.label}</td>
+                    <td>{card.count}</td>
+                    <td>{card.percentage}</td>
+                  </tr>
+                ))}
+                {percentageCards.length === 0 && (
+                  <tr>
+                    <td colSpan="3">Belum ada data untuk filter yang dipilih.</td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </section>
+
           {/* FOOTER */}
           <div className="footer-info">
             <Info size={16} />
@@ -799,6 +1441,89 @@ function App() {
         )}
 
       </main>
+
+      {isLoginModalOpen && !isAdmin && (
+        <div className="tw-fixed tw-inset-0 tw-z-[2000] tw-flex tw-items-center tw-justify-center tw-bg-slate-950/80 tw-p-4 tw-backdrop-blur-sm">
+          <section
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="admin-login-title"
+            className="tw-relative tw-max-h-[90vh] tw-w-full tw-max-w-lg tw-overflow-y-auto tw-rounded-2xl tw-border tw-border-slate-700 tw-bg-slate-900/80 tw-p-6 tw-shadow-2xl tw-backdrop-blur-md sm:tw-p-8"
+          >
+            <div className="tw-mb-6 tw-flex tw-flex-col tw-items-center tw-text-center">
+              <div className="tw-mb-4 tw-flex tw-h-14 tw-w-14 tw-items-center tw-justify-center tw-rounded-2xl tw-border tw-border-cyan-400/30 tw-bg-cyan-400/10 tw-shadow-[0_0_24px_rgba(34,211,238,0.18)]">
+                <MapPin
+                  size={30}
+                  strokeWidth={2.5}
+                  className="tw-text-cyan-300 tw-drop-shadow-[0_0_10px_rgba(34,211,238,0.9)]"
+                />
+              </div>
+              <h2 id="admin-login-title" className="tw-text-2xl tw-font-extrabold tw-tracking-wide tw-text-white sm:tw-text-3xl">
+                PIN DINSOSP3A
+              </h2>
+              <p className="tw-mt-2 tw-max-w-sm tw-text-sm tw-leading-relaxed tw-text-slate-300">
+                Peta Informasi Navigasi Dinas Sosial Pemberdayaan Perempuan dan Perlindungan Anak Kab. Manggarai Barat
+              </p>
+              <p className="tw-mt-3 tw-text-xs tw-font-semibold tw-uppercase tw-tracking-[0.2em] tw-text-cyan-300">
+                Login Admin
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={closeLoginModal}
+              className="tw-absolute tw-right-3 tw-top-3 tw-rounded-lg tw-p-2 tw-text-slate-400 hover:tw-bg-slate-800 hover:tw-text-white"
+              aria-label="Tutup form login"
+            >
+              <X size={18} />
+            </button>
+
+            <form onSubmit={handleLogin} className="tw-space-y-4">
+              <div>
+                <label htmlFor="admin-login-email" className="tw-mb-1.5 tw-block tw-text-sm tw-font-medium tw-text-slate-200">
+                  Email
+                </label>
+                <input
+                  id="admin-login-email"
+                  type="email"
+                  autoComplete="username"
+                  required
+                  value={loginEmail}
+                  onChange={(event) => setLoginEmail(event.target.value)}
+                  className="tw-w-full tw-rounded-lg tw-border tw-border-slate-700 tw-bg-slate-950 tw-px-3 tw-py-2.5 tw-text-sm tw-text-white tw-outline-none placeholder:tw-text-slate-500 focus:tw-border-sky-500 focus:tw-ring-2 focus:tw-ring-sky-500/20"
+                  placeholder="admin@dinsos.go.id"
+                />
+              </div>
+              <div>
+                <label htmlFor="admin-login-password" className="tw-mb-1.5 tw-block tw-text-sm tw-font-medium tw-text-slate-200">
+                  Password
+                </label>
+                <input
+                  id="admin-login-password"
+                  type="password"
+                  autoComplete="current-password"
+                  required
+                  value={loginPassword}
+                  onChange={(event) => setLoginPassword(event.target.value)}
+                  className="tw-w-full tw-rounded-lg tw-border tw-border-slate-700 tw-bg-slate-950 tw-px-3 tw-py-2.5 tw-text-sm tw-text-white tw-outline-none placeholder:tw-text-slate-500 focus:tw-border-sky-500 focus:tw-ring-2 focus:tw-ring-sky-500/20"
+                  placeholder="Masukkan password"
+                />
+              </div>
+              {loginError && (
+                <p role="alert" className="tw-text-sm tw-text-rose-400">
+                  {loginError}
+                </p>
+              )}
+              <button
+                type="submit"
+                className="tw-flex tw-w-full tw-items-center tw-justify-center tw-gap-2 tw-rounded-lg tw-bg-sky-600 tw-px-4 tw-py-2.5 tw-text-sm tw-font-semibold tw-text-white hover:tw-bg-sky-500 focus:tw-outline-none focus:tw-ring-2 focus:tw-ring-sky-400 focus:tw-ring-offset-2 focus:tw-ring-offset-slate-900"
+              >
+                <LogIn size={16} />
+                Masuk ke Dashboard
+              </button>
+            </form>
+          </section>
+        </div>
+      )}
 
     </div>
   );

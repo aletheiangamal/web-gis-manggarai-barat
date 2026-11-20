@@ -9,6 +9,7 @@ import {
   LockKeyhole,
   MapPinned,
   ShieldCheck,
+  Trash2,
   UploadCloud
 } from 'lucide-react'
 import Papa from 'papaparse'
@@ -226,7 +227,10 @@ function AdminDashboard() {
         }
       }
 
-      const combinedRecords = [...existingRecords, ...records]
+      const combinedRecords = [
+        ...existingRecords.filter((record) => record?.nama_bidang !== selectedBidang),
+        ...records
+      ]
       window.localStorage.setItem(dataStorageKey, JSON.stringify(combinedRecords))
       window.dispatchEvent(new CustomEvent('dataGisDinsosUpdated', {
         detail: combinedRecords
@@ -234,7 +238,7 @@ function AdminDashboard() {
 
       setNotification({
         type: 'success',
-        message: `${records.length} baris dari bidang ${selectedBidang} berhasil disimpan ke localStorage browser.`
+        message: `${records.length} baris dari bidang ${selectedBidang} berhasil menggantikan data sebelumnya.`
       })
       setFile(null)
       if (fileInputRef.current) fileInputRef.current.value = ''
@@ -247,6 +251,26 @@ function AdminDashboard() {
       })
     } finally {
       setIsUploading(false)
+    }
+  }
+
+  function handleClearAllData() {
+    if (!window.confirm('Yakin ingin menghapus semua data GIS yang tersimpan di browser?')) {
+      return
+    }
+
+    try {
+      window.localStorage.removeItem(dataStorageKey)
+      window.localStorage.removeItem(legacyDataStorageKey)
+      window.dispatchEvent(new CustomEvent('dataGisDinsosUpdated', { detail: [] }))
+      setNotification({ type: 'success', message: 'Semua data GIS berhasil dikosongkan.' })
+    } catch (error) {
+      setNotification({
+        type: 'error',
+        message: error instanceof Error
+          ? error.message
+          : 'Terjadi kesalahan saat menghapus data GIS.'
+      })
     }
   }
 
@@ -282,8 +306,8 @@ function AdminDashboard() {
               Impor data kegiatan
             </h2>
             <p className="tw-mt-2 tw-text-sm tw-leading-6 tw-text-slate-400">
-              Pilih bidang dan file CSV atau Excel untuk menambahkan lokasi kegiatan ke peta.
-              Data akan divalidasi sebelum disimpan.
+              Pilih bidang dan file CSV atau Excel untuk memperbarui lokasi kegiatan pada peta.
+              Data akan divalidasi sebelum menggantikan data bidang tersebut.
             </p>
           </div>
 
@@ -292,18 +316,29 @@ function AdminDashboard() {
               aria-labelledby="upload-card-title"
               className="tw-overflow-hidden tw-rounded-xl tw-border tw-border-slate-700/80 tw-bg-slate-800 tw-shadow-lg tw-shadow-black/20"
             >
-              <div className="tw-flex tw-items-center tw-gap-3 tw-border-b tw-border-slate-700/80 tw-p-5 sm:tw-p-6">
-                <div className="tw-flex tw-h-10 tw-w-10 tw-shrink-0 tw-items-center tw-justify-center tw-rounded-lg tw-bg-indigo-500/15 tw-text-indigo-300">
-                  <UploadCloud size={19} />
+              <div className="tw-flex tw-flex-wrap tw-items-center tw-justify-between tw-gap-3 tw-border-b tw-border-slate-700/80 tw-p-5 sm:tw-p-6">
+                <div className="tw-flex tw-min-w-0 tw-items-center tw-gap-3">
+                  <div className="tw-flex tw-h-10 tw-w-10 tw-shrink-0 tw-items-center tw-justify-center tw-rounded-lg tw-bg-indigo-500/15 tw-text-indigo-300">
+                    <UploadCloud size={19} />
+                  </div>
+                  <div className="tw-min-w-0">
+                    <h3 className="tw-font-semibold tw-text-white" id="upload-card-title">
+                      Unggah spreadsheet
+                    </h3>
+                    <p className="tw-mt-0.5 tw-text-xs tw-text-slate-400">
+                      Format file yang didukung: .csv, .xlsx, .xls
+                    </p>
+                  </div>
                 </div>
-                <div>
-                  <h3 className="tw-font-semibold tw-text-white" id="upload-card-title">
-                    Unggah spreadsheet
-                  </h3>
-                  <p className="tw-mt-0.5 tw-text-xs tw-text-slate-400">
-                    Format file yang didukung: .csv, .xlsx, .xls
-                  </p>
-                </div>
+                <button
+                  className="tw-inline-flex tw-shrink-0 tw-items-center tw-gap-1.5 tw-rounded-md tw-border tw-border-rose-400/20 tw-bg-rose-400/[0.07] tw-px-2.5 tw-py-2 tw-text-xs tw-font-medium tw-text-rose-300 tw-transition hover:tw-border-rose-400/40 hover:tw-bg-rose-400/15 disabled:tw-cursor-not-allowed disabled:tw-opacity-50"
+                  disabled={isUploading}
+                  onClick={handleClearAllData}
+                  type="button"
+                >
+                  <Trash2 size={14} />
+                  Kosongkan Semua Data
+                </button>
               </div>
 
               <form className="tw-space-y-5 tw-p-5 sm:tw-p-6" onSubmit={handleUpload}>
