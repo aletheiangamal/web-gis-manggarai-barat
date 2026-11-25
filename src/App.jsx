@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 
 import {
   MapContainer,
@@ -32,8 +33,7 @@ import {
 import Papa from 'papaparse';
 import 'leaflet/dist/leaflet.css';
 import './index.css';
-import AdminDashboard from './AdminDashboard.jsx';
-
+import { useAuth } from './useAuth.js';
 import { union } from '@turf/union';
 import { difference } from '@turf/difference';
 
@@ -440,18 +440,24 @@ function onEachVillage(feature, layer) {
 }
 
 function App() {
+  const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const { session, signIn, signOut } = useAuth();
   const [activeMenu, setActiveMenu] = useState('peta-utama');
-  const [isAdmin, setIsAdmin] = useState(
-    () => window.localStorage.getItem('web-gis-is-admin') === 'true'
-  );
+  const isAdmin = Boolean(session);
   const [showLoginModal, setShowLoginModal] = useState(false);
   const [loginEmail, setLoginEmail] = useState('');
   const [loginPassword, setLoginPassword] = useState('');
   const [loginError, setLoginError] = useState('');
-  const isLoginModalOpen =
-    showLoginModal || (activeMenu === 'dashboard-admin' && !isAdmin);
-  const [selectedKecamatan, setSelectedKecamatan] = useState(null);
-  const [selectedYear, setSelectedYear] = useState('all');
+  const isLoginModalOpen = showLoginModal;
+  const requestedKecamatan = searchParams.get('kecamatan');
+  const selectedKecamatan = Object.values(districts).find(({ name }) =>
+    normalizeIdentifier(name) === normalizeIdentifier(requestedKecamatan ?? '')
+  )?.name ?? null;
+  const requestedYear = searchParams.get('tahun');
+  const selectedYear = ['2024', '2025', '2026'].includes(requestedYear)
+    ? requestedYear
+    : 'all';
   const [searchQuery, setSearchQuery] = useState('');
   const [isSearchResultsOpen, setIsSearchResultsOpen] = useState(false);
   const [searchSelection, setSearchSelection] = useState(null);
@@ -529,6 +535,18 @@ function App() {
         };
       });
 
+  function updateFilterParam(name, value) {
+    setSearchParams((currentParams) => {
+      const nextParams = new URLSearchParams(currentParams);
+      if (!value || value === 'all') {
+        nextParams.delete(name);
+      } else {
+        nextParams.set(name, value);
+      }
+      return nextParams;
+    }, { replace: true });
+  }
+
   function openLoginModal() {
     setLoginError('');
     setShowLoginModal(true);
@@ -536,34 +554,34 @@ function App() {
 
   function closeLoginModal() {
     setShowLoginModal(false);
-    if (!isAdmin && activeMenu === 'dashboard-admin') {
-      setActiveMenu('peta-utama');
-    }
   }
 
-  function handleLogin(event) {
+  async function handleLogin(event) {
     event.preventDefault();
-    if (
-      loginEmail.trim() !== 'admin@dinsos.go.id' ||
-      loginPassword !== 'admin123'
-    ) {
-      setLoginError('Email atau password tidak sesuai.');
-      return;
-    }
-
-    window.localStorage.setItem('web-gis-is-admin', 'true');
-    setIsAdmin(true);
-    setActiveMenu('dashboard-admin');
-    setShowLoginModal(false);
-    setLoginEmail('');
-    setLoginPassword('');
     setLoginError('');
+    try {
+      await signIn(loginEmail.trim(), loginPassword);
+      setShowLoginModal(false);
+      setLoginEmail('');
+      setLoginPassword('');
+      navigate('/admin');
+    } catch (error) {
+      setLoginError(error instanceof Error
+        ? error.message
+        : 'Gagal masuk menggunakan Supabase.');
+    }
   }
 
-  function handleLogout() {
-    window.localStorage.removeItem('web-gis-is-admin');
-    setIsAdmin(false);
-    setActiveMenu('peta-utama');
+  async function handleLogout() {
+    try {
+      await signOut();
+      setActiveMenu('peta-utama');
+      navigate('/', { replace: true });
+    } catch (error) {
+      setLoginError(error instanceof Error
+        ? error.message
+        : 'Gagal keluar dari sesi Supabase.');
+    }
   }
 
   const statistics = activeMenu === 'peta-utama'
@@ -825,6 +843,10 @@ function App() {
                     openLoginModal();
                     return;
                   }
+                  if (item.id === 'dashboard-admin') {
+                    navigate('/admin');
+                    return;
+                  }
                   setActiveMenu(item.id);
                 }}
                 aria-current={activeMenu === item.id ? 'page' : undefined}
@@ -841,6 +863,11 @@ function App() {
             <span className="status-indicator"></span>
             <span>Sistem Pemetaan Aktif</span>
           </div>
+          {loginError && !isLoginModalOpen && (
+            <p role="alert" className="tw-text-xs tw-text-rose-300">
+              {loginError}
+            </p>
+          )}
           {isAdmin ? (
             <button
               type="button"
@@ -907,9 +934,6 @@ function App() {
         </header>
 
         {/* CONTENT */}
-        {activeMenu === 'dashboard-admin' && isAdmin ? (
-          <AdminDashboard />
-        ) : (
         <section className="content-area">
 
           <div className="welcome">
@@ -1124,7 +1148,7 @@ function App() {
                 <select
                   id="map-year-filter"
                   value={selectedYear}
-                  onChange={(event) => setSelectedYear(event.target.value)}
+                  onChange={(event) => updateFilterParam('tahun', event.target.value)}
                   className="tw-min-w-0 tw-flex-1 tw-rounded-lg tw-border tw-border-slate-700 tw-bg-slate-950 tw-px-3 tw-py-2.5 tw-text-sm tw-text-slate-100 tw-outline-none focus:tw-border-sky-500 focus:tw-ring-2 focus:tw-ring-sky-500/20 sm:tw-flex-none"
                 >
                   <option value="all">Semua Tahun</option>
@@ -1270,8 +1294,11 @@ function App() {
                     key={code}
                     type="button"
                     aria-pressed={selectedKecamatan === district.name}
-                    onClick={() => setSelectedKecamatan((current) =>
-                      current === district.name ? null : district.name
+                    onClick={() => updateFilterParam(
+                      'kecamatan',
+                      selectedKecamatan === district.name
+                        ? ''
+                        : normalizeIdentifier(district.name)
                     )}
                   >
                     <span
@@ -1438,7 +1465,6 @@ function App() {
           </div>
 
         </section>
-        )}
 
       </main>
 

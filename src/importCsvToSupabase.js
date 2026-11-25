@@ -161,6 +161,9 @@ export async function importCsvToSupabase(file, namaBidang) {
   }
 
   const { supabase } = await import('./supabaseClient.js')
+  if (!supabase) {
+    throw new Error('Supabase belum dikonfigurasi. Periksa VITE_SUPABASE_URL dan VITE_SUPABASE_ANON_KEY.')
+  }
   const { error } = await supabase
     .from('lokasi_kegiatan')
     .insert(records)
