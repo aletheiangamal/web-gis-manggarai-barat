@@ -260,6 +260,11 @@ button {
   min-width: 0;
 }
 
+.mobile-menu-toggle,
+.mobile-drawer-backdrop {
+  display: none;
+}
+
 .topbar {
   background: #111e2e;
   border-bottom: 1px solid #24364a;
@@ -503,6 +508,18 @@ button {
   box-shadow: 0 0 0 2px var(--marker-color), 0 2px 6px #0009;
 }
 
+.marker-cluster {
+  background-color: rgba(8, 145, 178, 0.38);
+  border: 1px solid rgba(103, 232, 249, 0.85);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.45);
+}
+
+.marker-cluster div {
+  background-color: #0e7490;
+  color: #fff;
+  font-weight: 800;
+}
+
 .leaflet-map {
   width: 100%;
   height: 100%;
@@ -664,6 +681,40 @@ button {
   font-size: 10px;
 }
 
+.map-legend .district-legend-heading {
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 0;
+}
+
+.map-legend .district-legend-list {
+  display: block;
+  margin-top: 0;
+}
+
+.district-legend-heading strong {
+  margin-bottom: 0;
+  white-space: nowrap;
+}
+
+.district-reset-button {
+  flex-shrink: 0;
+  padding: 3px 6px;
+  border: 1px solid #37536d;
+  border-radius: 5px;
+  background: #1b3853;
+  color: #bae6fd;
+  font-size: 9px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 150ms ease, border-color 150ms ease;
+}
+
+.district-reset-button:hover {
+  border-color: #38bdf8;
+  background: #164e63;
+}
+
 .map-legend div {
   display: flex;
   align-items: center;
@@ -684,6 +735,35 @@ button {
   font-size: inherit;
   text-align: left;
   cursor: pointer;
+  transition: background-color 150ms ease, color 150ms ease;
+}
+
+.map-legend .district-legend-item {
+  padding: 3px 5px;
+  border-radius: 5px;
+}
+
+.map-legend .district-legend-item:hover {
+  background: #1b3853;
+  color: #f0f9ff;
+}
+
+.map-legend .district-legend-item.active {
+  background: #164e63;
+  color: #ecfeff;
+}
+
+.district-swatch {
+  width: 10px;
+  height: 10px;
+  flex: 0 0 10px;
+  border: 1px solid rgba(255, 255, 255, 0.9);
+  border-radius: 50%;
+  box-shadow: 0 0 0 1px rgba(15, 23, 42, 0.7);
+}
+
+.legend-collapse-toggle {
+  display: none;
 }
 
 .district-legend-item.active {
@@ -1005,6 +1085,223 @@ button {
   }
 }
 
+@media (max-width: 767px) {
+  .mobile-menu-toggle {
+    display: grid;
+    width: 38px;
+    height: 38px;
+    flex: 0 0 38px;
+    place-items: center;
+    border: 1px solid #36516b;
+    border-radius: 8px;
+    background: #1b3853;
+    color: #d7e9f8;
+    cursor: pointer;
+  }
+
+  .mobile-menu-toggle:hover {
+    background: #245172;
+  }
+
+  .mobile-menu-toggle:focus-visible,
+  .legend-collapse-toggle:focus-visible,
+  .district-reset-button:focus-visible {
+    outline: 2px solid #7dd3fc;
+    outline-offset: 2px;
+  }
+
+  .mobile-drawer-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 1199;
+    display: block;
+    border: 0;
+    background: rgba(2, 8, 18, 0.72);
+    cursor: pointer;
+  }
+
+  .sidebar {
+    position: fixed;
+    z-index: 1200;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    width: min(85vw, 300px);
+    height: 100vh;
+    height: 100dvh;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 22px 16px;
+    box-shadow: 16px 0 40px rgba(0, 0, 0, 0.4);
+    transform: translateX(-105%);
+    transition: transform 220ms ease;
+  }
+
+  .sidebar.sidebar-open {
+    transform: translateX(0);
+  }
+
+  .sidebar .brand {
+    justify-content: flex-start;
+  }
+
+  .sidebar .brand > div:last-child,
+  .sidebar .section-label,
+  .sidebar .menu-item span,
+  .sidebar .sidebar-bottom span {
+    display: block;
+  }
+
+  .sidebar .sidebar-bottom > div {
+    display: flex;
+  }
+
+  .sidebar .sidebar-bottom button {
+    align-self: stretch;
+    justify-content: center;
+  }
+
+  .sidebar .menu-item {
+    justify-content: flex-start;
+    padding: 11px 9px;
+  }
+
+  .topbar {
+    padding: 10px 12px 12px;
+  }
+
+  .topbar-heading {
+    gap: 10px;
+  }
+
+  .topbar-heading > div:first-of-type {
+    flex: 1;
+  }
+
+  .topbar-right {
+    flex-shrink: 0;
+  }
+
+  .content-area {
+    padding: 14px 12px;
+  }
+
+  .statistics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+  }
+
+  .stat-card {
+    min-width: 0;
+    gap: 9px;
+    padding: 12px;
+  }
+
+  .stat-icon {
+    width: 36px;
+    height: 36px;
+  }
+
+  .map-header {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 12px;
+    padding: 14px 12px;
+  }
+
+  .map-header-actions {
+    display: grid;
+    width: 100%;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+  }
+
+  .map-header-actions .map-action {
+    min-width: 0;
+    justify-content: center;
+    gap: 5px;
+    padding: 9px 5px;
+    font-size: 10px;
+    white-space: normal;
+  }
+
+  .map-header-actions .map-action span {
+    display: inline;
+    margin-top: 0;
+    color: inherit;
+    text-align: center;
+  }
+
+  .district-legend {
+    left: 8px;
+    bottom: 8px;
+    max-width: calc(100% - 16px);
+    padding: 6px;
+  }
+
+  .district-legend .district-legend-heading,
+  .district-legend .district-legend-list {
+    display: none;
+  }
+
+  .district-legend .legend-collapse-toggle {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    min-height: 32px;
+    padding: 5px 8px;
+    border: 1px solid #37536d;
+    border-radius: 6px;
+    background: #1b3853;
+    color: #e4edf6;
+    font-size: 10px;
+    font-weight: 700;
+    cursor: pointer;
+  }
+
+  .district-legend.is-expanded {
+    width: min(270px, calc(100% - 16px));
+    max-height: min(45vh, 360px);
+    overflow-y: auto;
+    padding: 10px;
+  }
+
+  .district-legend.is-expanded .district-legend-heading {
+    display: flex;
+  }
+
+  .district-legend.is-expanded .district-legend-list {
+    display: block;
+    max-height: calc(45vh - 64px);
+    overflow-y: auto;
+  }
+
+  .district-legend.is-expanded .legend-collapse-toggle {
+    width: 100%;
+    margin-top: 8px;
+  }
+
+  .district-legend.is-expanded .legend-collapse-toggle svg {
+    transform: rotate(180deg);
+  }
+
+  .district-legend-list .district-legend-item {
+    margin-top: 4px;
+  }
+
+  .summary-table-scroll {
+    max-width: 100%;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .summary-data-table {
+    min-width: 640px;
+  }
+}
+
 @media print {
   @page {
     margin: 12mm;
@@ -1018,6 +1315,7 @@ button {
   }
 
   .sidebar,
+  .mobile-drawer-backdrop,
   .topbar,
   .print-hide,
   .map-filter-bar,

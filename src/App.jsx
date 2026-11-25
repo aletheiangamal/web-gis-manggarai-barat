@@ -12,8 +12,9 @@ import {
   Tooltip,
   ScaleControl
 } from 'react-leaflet';
+import MarkerClusterGroup from 'react-leaflet-cluster';
 
-import { control, divIcon, DomEvent, DomUtil } from 'leaflet';
+import { control, divIcon, DomEvent, DomUtil, geoJSON } from 'leaflet';
 
 import {
   Map as MapIcon,
@@ -27,11 +28,15 @@ import {
   Printer,
   LogIn,
   LogOut,
+  ChevronDown,
+  Menu,
   X
 } from 'lucide-react';
 
 import Papa from 'papaparse';
 import 'leaflet/dist/leaflet.css';
+import 'react-leaflet-cluster/dist/assets/MarkerCluster.css';
+import 'react-leaflet-cluster/dist/assets/MarkerCluster.Default.css';
 import './index.css';
 import { useAuth } from './useAuth.js';
 import { union } from '@turf/union';
@@ -372,6 +377,32 @@ function MapFlyToController({ searchSelection, tableSelection, markerRefs }) {
   return null;
 }
 
+function MapDistrictController({ selectedKecamatan }) {
+  const map = useMap();
+
+  useEffect(() => {
+    const features = selectedKecamatan
+      ? allFeatures.filter((feature) =>
+          districts[feature.properties.parent_code]?.name === selectedKecamatan
+        )
+      : allFeatures;
+    const bounds = geoJSON({
+      type: 'FeatureCollection',
+      features
+    }).getBounds();
+
+    if (bounds.isValid()) {
+      map.flyToBounds(bounds, {
+        padding: [24, 24],
+        maxZoom: selectedKecamatan ? 12 : MAP_INITIAL_ZOOM,
+        duration: 0.8
+      });
+    }
+  }, [map, selectedKecamatan]);
+
+  return null;
+}
+
 function MapHomeControl() {
   const map = useMap();
 
@@ -407,9 +438,9 @@ function styleFeature(feature, selectedKecamatan) {
     fillOpacity: isSelected
       ? selectedKecamatan === null ? 0.55 : 0.75
       : 0.12,
-    color: '#ffffff',
-    weight: 1,
-    opacity: isSelected ? 1 : 0.2,
+    color: selectedKecamatan === district?.name ? '#e0f2fe' : '#ffffff',
+    weight: selectedKecamatan === district?.name ? 3 : 1,
+    opacity: isSelected ? 1 : 0.3,
     className: 'district-polygon'
   };
 }
@@ -449,6 +480,8 @@ function App() {
   const [loginEmail, setLoginEmail] = useState('');
   const [loginPassword, setLoginPassword] = useState('');
   const [loginError, setLoginError] = useState('');
+  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+  const [isLegendExpanded, setIsLegendExpanded] = useState(false);
   const isLoginModalOpen = showLoginModal;
   const requestedKecamatan = searchParams.get('kecamatan');
   const selectedKecamatan = Object.values(districts).find(({ name }) =>
@@ -469,6 +502,19 @@ function App() {
   const markerRefs = useRef(new Map());
   const tableSelectionId = useRef(0);
   const [tableSelection, setTableSelection] = useState(null);
+
+  useEffect(() => {
+    if (!isMobileMenuOpen) return undefined;
+
+    function handleEscape(event) {
+      if (event.key === 'Escape') {
+        setIsMobileMenuOpen(false);
+      }
+    }
+
+    window.addEventListener('keydown', handleEscape);
+    return () => window.removeEventListener('keydown', handleEscape);
+  }, [isMobileMenuOpen]);
   const yearFilteredLocations = selectedYear === 'all'
     ? mapLocations
     : mapLocations.filter((location) =>
@@ -797,7 +843,18 @@ function App() {
     <div className="app-container">
 
       {/* SIDEBAR */}
-      <aside className="sidebar">
+      {isMobileMenuOpen && (
+        <button
+          type="button"
+          className="mobile-drawer-backdrop"
+          onClick={() => setIsMobileMenuOpen(false)}
+          aria-label="Tutup menu"
+        />
+      )}
+      <aside
+        id="app-sidebar"
+        className={`sidebar ${isMobileMenuOpen ? 'sidebar-open' : ''}`}
+      >
 
         <div className="brand">
           <div className="tw-flex tw-h-10 tw-w-10 tw-shrink-0 tw-items-center tw-justify-center">
@@ -839,6 +896,7 @@ function App() {
                 key={item.name}
                 className={`menu-item ${activeMenu === item.id ? 'active' : ''}`}
                 onClick={() => {
+                  setIsMobileMenuOpen(false);
                   if (item.id === 'dashboard-admin' && !isAdmin) {
                     openLoginModal();
                     return;
@@ -915,11 +973,21 @@ function App() {
         {/* HEADER */}
         <header className="topbar">
           <div className="topbar-heading">
+            <button
+              type="button"
+              className="mobile-menu-toggle"
+              onClick={() => setIsMobileMenuOpen(true)}
+              aria-label="Buka menu navigasi"
+              aria-expanded={isMobileMenuOpen}
+              aria-controls="app-sidebar"
+            >
+              <Menu size={21} aria-hidden="true" />
+            </button>
             <div className="tw-min-w-0">
               <h1 className="tw-text-lg tw-font-extrabold tw-leading-tight tw-tracking-wide tw-text-white sm:tw-text-2xl">
                 PIN DINSOSP3A
               </h1>
-              <p className="tw-mt-1 tw-max-w-3xl tw-text-xs tw-leading-relaxed tw-text-slate-400 sm:tw-text-sm">
+              <p className="tw-mt-1 tw-max-w-[48vw] tw-text-xs tw-leading-relaxed tw-text-slate-400 md:tw-max-w-3xl sm:tw-text-sm">
                 Peta Informasi Navigasi Dinas Sosial Pemberdayaan Perempuan dan Perlindungan Anak Kab. Manggarai Barat
               </p>
             </div>
@@ -990,10 +1058,10 @@ function App() {
               </p>
             </div>
             {percentageCards.length > 0 ? (
-              <div className="tw-grid tw-grid-cols-2 md:tw-grid-cols-3 lg:tw-grid-cols-6 tw-gap-4">
+              <div className="tw-grid tw-grid-cols-2 tw-gap-2 md:tw-grid-cols-3 md:tw-gap-4 lg:tw-grid-cols-6">
                 {percentageCards.map((card) => (
                   <article
-                    className="tw-rounded-xl tw-border tw-border-slate-700 tw-bg-slate-800/90 tw-p-4"
+                    className="tw-rounded-xl tw-border tw-border-slate-700 tw-bg-slate-800/90 tw-p-3 md:tw-p-4"
                     key={card.key}
                     style={{ borderTopWidth: 3, borderTopColor: card.color }}
                   >
@@ -1001,7 +1069,7 @@ function App() {
                       {card.label}
                     </h4>
                     <p
-                      className="tw-mt-3 tw-text-3xl tw-font-bold tw-tracking-tight"
+                      className="tw-mt-3 tw-text-2xl tw-font-bold tw-tracking-tight md:tw-text-3xl"
                       style={{ color: card.color }}
                     >
                       {card.percentage}
@@ -1180,6 +1248,7 @@ function App() {
                   tableSelection={tableSelection}
                   markerRefs={markerRefs}
                 />
+                <MapDistrictController selectedKecamatan={selectedKecamatan} />
                 <MapHomeControl />
 
                 <LayersControl position="topright">
@@ -1229,7 +1298,14 @@ function App() {
                   onEachFeature={onEachVillage}
                 />
 
-                {renderCsvMarkers()}
+                <MarkerClusterGroup
+                  chunkedLoading
+                  maxClusterRadius={60}
+                  disableClusteringAtZoom={15}
+                  showCoverageOnHover={false}
+                >
+                  {renderCsvMarkers()}
+                </MarkerClusterGroup>
 
               </MapContainer>
 
@@ -1282,34 +1358,54 @@ function App() {
               )}
 
               {/* MAP LEGEND */}
-              <div className="map-legend district-legend">
-
-                <strong>LEGENDA KECAMATAN</strong>
-
-                {Object.entries(districts).map(([code, district]) => (
+              <div className={`map-legend district-legend ${isLegendExpanded ? 'is-expanded' : ''}`}>
+                <div className="district-legend-heading">
+                  <strong>LEGENDA KECAMATAN</strong>
                   <button
-                    className={`district-legend-item ${
-                      selectedKecamatan === district.name ? 'active' : ''
-                    }`}
-                    key={code}
                     type="button"
-                    aria-pressed={selectedKecamatan === district.name}
-                    onClick={() => updateFilterParam(
-                      'kecamatan',
-                      selectedKecamatan === district.name
-                        ? ''
-                        : normalizeIdentifier(district.name)
-                    )}
+                    className="district-reset-button"
+                    onClick={() => updateFilterParam('kecamatan', '')}
+                    aria-label="Reset pilihan kecamatan dan tampilkan seluruh wilayah"
+                    title="Tampilkan semua kecamatan"
                   >
-                    <span
-                      className="district-swatch"
-                      style={{ backgroundColor: district.color }}
-                      aria-hidden="true"
-                    />
-                    <span>{district.name}</span>
+                    Reset / Semua Kecamatan
                   </button>
-                ))}
-
+                </div>
+                <button
+                  type="button"
+                  className="legend-collapse-toggle"
+                  onClick={() => setIsLegendExpanded((expanded) => !expanded)}
+                  aria-expanded={isLegendExpanded}
+                  aria-controls="district-legend-list"
+                >
+                  <span>Legenda Kecamatan</span>
+                  <ChevronDown size={16} aria-hidden="true" />
+                </button>
+                <div id="district-legend-list" className="district-legend-list">
+                  {Object.entries(districts).map(([code, district]) => (
+                    <button
+                      className={`district-legend-item ${
+                        selectedKecamatan === district.name ? 'active' : ''
+                      }`}
+                      key={code}
+                      type="button"
+                      aria-pressed={selectedKecamatan === district.name}
+                      onClick={() => updateFilterParam(
+                        'kecamatan',
+                        selectedKecamatan === district.name
+                          ? ''
+                          : normalizeIdentifier(district.name)
+                      )}
+                    >
+                      <span
+                        className="district-swatch"
+                        style={{ backgroundColor: district.color }}
+                        aria-hidden="true"
+                      />
+                      <span>{district.name}</span>
+                    </button>
+                  ))}
+                </div>
               </div>
 
               {/* MAP INFORMATION */}
