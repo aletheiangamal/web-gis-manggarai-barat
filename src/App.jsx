@@ -584,7 +584,12 @@ function App() {
   const [loginPassword, setLoginPassword] = useState('');
   const [loginError, setLoginError] = useState('');
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
-  const [isLegendExpanded, setIsLegendExpanded] = useState(false);
+  const [isLegendExpanded, setIsLegendExpanded] = useState(
+    () => !window.matchMedia('(max-width: 767px)').matches
+  );
+  const [isLegendCollapsed, setIsLegendCollapsed] = useState(
+    () => window.matchMedia('(max-width: 767px)').matches
+  );
   const isLoginModalOpen = showLoginModal;
   const requestedKecamatan = searchParams.get('kecamatan');
   const selectedKecamatan = Object.values(districts).find(({ name }) =>
@@ -1570,9 +1575,23 @@ function App() {
               )}
 
               {/* MAP LEGEND */}
-              <div className={`map-legend district-legend ${isLegendExpanded ? 'is-expanded' : ''}`}>
+              <div className={`map-legend district-legend ${
+                isLegendExpanded ? 'is-expanded' : ''
+              } ${isLegendCollapsed ? 'is-collapsed' : ''}`}>
                 <div className="district-legend-heading">
-                  <strong>LEGENDA KECAMATAN</strong>
+                  <button
+                    type="button"
+                    className="legend-collapse-toggle"
+                    onClick={() => {
+                      setIsLegendExpanded((expanded) => !expanded);
+                      setIsLegendCollapsed((collapsed) => !collapsed);
+                    }}
+                    aria-expanded={!isLegendCollapsed}
+                    aria-controls="district-legend-list"
+                  >
+                    <span>Legenda Kecamatan</span>
+                    <ChevronDown size={16} aria-hidden="true" />
+                  </button>
                   <button
                     type="button"
                     className="district-reset-button"
@@ -1583,16 +1602,6 @@ function App() {
                     Reset / Semua Kecamatan
                   </button>
                 </div>
-                <button
-                  type="button"
-                  className="legend-collapse-toggle"
-                  onClick={() => setIsLegendExpanded((expanded) => !expanded)}
-                  aria-expanded={isLegendExpanded}
-                  aria-controls="district-legend-list"
-                >
-                  <span>Legenda Kecamatan</span>
-                  <ChevronDown size={16} aria-hidden="true" />
-                </button>
                 <div id="district-legend-list" className="district-legend-list">
                   {Object.entries(districts).map(([code, district]) => (
                     <button
@@ -1618,12 +1627,6 @@ function App() {
                     </button>
                   ))}
                 </div>
-              </div>
-
-              {/* MAP INFORMATION */}
-              <div className="map-search">
-                <Search size={17} />
-                <span>Sentuh wilayah untuk melihat nama desa dan kecamatan</span>
               </div>
 
             </div>
