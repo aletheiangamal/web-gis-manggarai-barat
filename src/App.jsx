@@ -21,7 +21,6 @@ import {
   LayoutDashboard,
   Layers,
   MapPin,
-  Info,
   Maximize2,
   Search,
   Download,
@@ -506,6 +505,20 @@ function MapDistrictController({ selectedKecamatan }) {
   return null;
 }
 
+function MapResizeController({ isFullscreen }) {
+  const map = useMap();
+
+  useEffect(() => {
+    const frameId = window.requestAnimationFrame(() => {
+      map.invalidateSize({ pan: false });
+    });
+
+    return () => window.cancelAnimationFrame(frameId);
+  }, [map, isFullscreen]);
+
+  return null;
+}
+
 function MapHomeControl() {
   const map = useMap();
 
@@ -584,12 +597,12 @@ function App() {
   const [loginPassword, setLoginPassword] = useState('');
   const [loginError, setLoginError] = useState('');
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
-  const [isLegendExpanded, setIsLegendExpanded] = useState(
+  const [isMapFullscreen, setIsMapFullscreen] = useState(false);
+  const [isMapPanelOpen, setIsMapPanelOpen] = useState(
     () => !window.matchMedia('(max-width: 767px)').matches
   );
-  const [isLegendCollapsed, setIsLegendCollapsed] = useState(
-    () => window.matchMedia('(max-width: 767px)').matches
-  );
+  const [isDistrictLayerVisible, setIsDistrictLayerVisible] = useState(true);
+  const [visibleMapFields, setVisibleMapFields] = useState({});
   const isLoginModalOpen = showLoginModal;
   const requestedKecamatan = searchParams.get('kecamatan');
   const selectedKecamatan = Object.values(districts).find(({ name }) =>
@@ -624,6 +637,19 @@ function App() {
     window.addEventListener('keydown', handleEscape);
     return () => window.removeEventListener('keydown', handleEscape);
   }, [isMobileMenuOpen]);
+
+  useEffect(() => {
+    if (!isMapFullscreen) return undefined;
+
+    function handleEscape(event) {
+      if (event.key === 'Escape') {
+        setIsMapFullscreen(false);
+      }
+    }
+
+    window.addEventListener('keydown', handleEscape);
+    return () => window.removeEventListener('keydown', handleEscape);
+  }, [isMapFullscreen]);
   const yearFilteredLocations = selectedYear === 'all'
     ? mapLocations
     : mapLocations.filter((location) =>
@@ -886,7 +912,12 @@ function App() {
   }, []);
 
   function renderCsvMarkers() {
-    return visibleLocations.flatMap((location, index) => {
+    return visibleLocations
+      .filter((location) => {
+        const bidang = bidangMenus.find(({ id }) => belongsToBidang(location, id));
+        return !bidang || visibleMapFields[bidang.id] !== false;
+      })
+      .flatMap((location, index) => {
       const latitude = Number(location.latitude);
       const longitude = Number(location.longitude);
       if (
@@ -978,7 +1009,7 @@ function App() {
           </Popup>
         </Marker>
       ];
-    });
+      });
   }
 
   const menus = [
@@ -990,7 +1021,7 @@ function App() {
   ];
 
   return (
-    <div className="app-container">
+    <div className={`app-container ${isMapFullscreen ? 'map-fullscreen' : ''}`}>
 
       {/* SIDEBAR */}
       {isMobileMenuOpen && (
@@ -1321,7 +1352,7 @@ function App() {
           </section>
 
           {/* MAP CARD */}
-          <div className="map-card">
+          <div id="main-map-card" className="map-card">
 
             <div className="map-header">
 
@@ -1337,14 +1368,15 @@ function App() {
               <div className="map-header-actions print-hide">
                 <button
                   type="button"
-                  className="map-action"
-                  onClick={() => window.open(
-                    'https://www.arcgis.com/apps/mapviewer/',
-                    '_blank'
-                  )}
+                  className="map-action map-fullscreen-toggle"
+                  onClick={() => {
+                    if (!isMapFullscreen) setIsMapPanelOpen(true);
+                    setIsMapFullscreen(!isMapFullscreen);
+                  }}
+                  aria-pressed={isMapFullscreen}
                 >
                   <Maximize2 size={17} />
-                  <span>Map Viewer</span>
+                  <span>{isMapFullscreen ? 'Keluar Layar Penuh' : 'Map Viewer'}</span>
                 </button>
                 <button
                   type="button"
@@ -1445,190 +1477,270 @@ function App() {
             </div>
 
             {/* INTERACTIVE MAP */}
-            <div className="map-wrapper">
-
-              <MapContainer
-                center={MAP_INITIAL_CENTER}
-                zoom={MAP_INITIAL_ZOOM}
-                minZoom={10}
-                maxZoom={18}
-                dragging={true}
-                zoomControl={true}
-                scrollWheelZoom={true}
-                maxBounds={[[-9.15, 119.25], [-8.15, 120.55]]}
-                maxBoundsViscosity={1.0}
-                className="leaflet-map"
+            <div className="map-workspace">
+              <button
+                type="button"
+                className="map-panel-toggle"
+                onClick={() => setIsMapPanelOpen((isOpen) => !isOpen)}
+                aria-expanded={isMapPanelOpen}
+                aria-controls="map-control-panel"
               >
+                <Layers size={16} aria-hidden="true" />
+                <span>Panel Layer & Legenda</span>
+                <ChevronDown size={16} aria-hidden="true" />
+              </button>
 
-                <MapFlyToController
-                  searchSelection={searchSelection}
-                  tableSelection={tableSelection}
-                  markerRefs={markerRefs}
-                />
-                <MapDistrictController selectedKecamatan={selectedKecamatan} />
-                <MapHomeControl />
-
-                <LayersControl position="topright">
-                  <LayersControl.BaseLayer name="Peta Jalan">
-                    <TileLayer
-                      attribution='Tiles &copy; Esri — Sources: Esri, HERE, Garmin, USGS, Intermap, and the GIS User Community'
-                      url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}"
-                      maxZoom={19}
+              <aside
+                id="map-control-panel"
+                className={`map-control-panel ${isMapPanelOpen ? 'is-open' : ''}`}
+                aria-label="Kontrol layer dan legenda peta"
+              >
+                <section className="map-brand-card">
+                  {hasAgencyLogo && (
+                    <img
+                      src="/logo-mabar.png"
+                      alt="Logo Kabupaten Manggarai Barat"
+                      onError={() => setHasAgencyLogo(false)}
                     />
-                  </LayersControl.BaseLayer>
+                  )}
+                  <h2>PIN DINSOSP3A</h2>
+                  <p>Kabupaten Manggarai Barat</p>
+                </section>
 
-                  <LayersControl.BaseLayer checked name="Citra Satelit">
-                    <TileLayer
-                      attribution='&copy; Google'
-                      url="https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}"
-                      maxZoom={20}
-                    />
-                  </LayersControl.BaseLayer>
-
-                  <LayersControl.Overlay checked name="Jalan & Label">
-                    <TileLayer
-                      attribution='Overlay &copy; Esri — Sources: Esri, HERE, Garmin, and the GIS User Community'
-                      url="https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Transportation/MapServer/tile/{z}/{y}/{x}"
-                      maxZoom={19}
-                    />
-                  </LayersControl.Overlay>
-                </LayersControl>
-
-                <ScaleControl position="bottomright" metric imperial={false} />
-
-                {/* PENUTUP AREA DI LUAR MANGGARAI BARAT */}
-                <GeoJSON
-                  data={maskGeoJSON}
-                  style={() => ({
-                    fillColor: '#f3f6fa',
-                    fillOpacity: 1,
-                    color: '#f3f6fa',
-                    weight: 0,
-                    opacity: 0
-                  })}
-                />
-
-                {/* BATAS DAN WARNA 12 KECAMATAN */}
-                <GeoJSON
-                  data={villageGeoJSON}
-                  style={(feature) => styleFeature(feature, selectedKecamatan)}
-                  onEachFeature={onEachVillage}
-                />
-
-                <MarkerClusterGroup
-                  chunkedLoading
-                  maxClusterRadius={60}
-                  disableClusteringAtZoom={15}
-                  showCoverageOnHover={false}
-                >
-                  {renderCsvMarkers()}
-                </MarkerClusterGroup>
-
-              </MapContainer>
-
-              {activeBidang && (
-                <section className="layer-manager map-layer-manager" aria-labelledby="layer-manager-title">
+                <section className="layer-manager map-layer-manager" aria-labelledby="map-admin-title">
                   <div className="layer-manager-heading">
                     <div>
-                      <h3 id="layer-manager-title">Manajemen Layer</h3>
-                      <p>Filter subkategori {activeBidang.name}</p>
+                      <h3 id="map-admin-title">Administrasi</h3>
+                      <p>Batas wilayah dan legenda kecamatan</p>
                     </div>
-                    <span className="layer-count">{activeLayerCount}/{layerCategories.length}</span>
                   </div>
-                  <div className="layer-list">
-                    {layerCategories.length > 0 ? layerCategories.map((category) => {
-                      const layerKey = `${activeMenu}:${normalizeIdentifier(category)}`;
-                      const isEnabled = enabledLayers[layerKey] !== false;
-                      return (
-                        <label className="layer-item" key={layerKey}>
-                          <span className="layer-item-info">
-                            <span
-                              className="layer-color"
-                              style={{ '--layer-color': activeBidang.color }}
-                              aria-hidden="true"
-                            />
-                            <span className="layer-item-copy">
-                              <span className="layer-name">{category}</span>
-                              <span className="layer-state">
-                                {isEnabled ? 'Aktif' : 'Nonaktif'}
-                              </span>
-                            </span>
-                          </span>
-                          <input
-                            className="layer-toggle-input"
-                            type="checkbox"
-                            checked={isEnabled}
-                            onChange={() => setEnabledLayers((current) => ({
-                              ...current,
-                              [layerKey]: !isEnabled
-                            }))}
-                            aria-label={`${isEnabled ? 'Matikan' : 'Aktifkan'} layer ${category}`}
+                  <label className="map-layer-checkbox">
+                    <input
+                      type="checkbox"
+                      checked={isDistrictLayerVisible}
+                      onChange={(event) => setIsDistrictLayerVisible(event.target.checked)}
+                    />
+                    <span className="map-checkbox-indicator" aria-hidden="true" />
+                    <span>Batas Desa/Kelurahan</span>
+                  </label>
+                  <div className="district-control">
+                    <div className="district-control-heading">
+                      <span>12 Kecamatan</span>
+                      <button
+                        type="button"
+                        className="district-reset-button"
+                        onClick={() => updateFilterParam('kecamatan', '')}
+                        aria-label="Reset zoom dan tampilkan seluruh kecamatan"
+                        title="Tampilkan semua kecamatan"
+                      >
+                        Reset Zoom
+                      </button>
+                    </div>
+                    <div className="district-control-list">
+                      {Object.entries(districts).map(([code, district]) => (
+                        <button
+                          className={`district-control-item ${
+                            selectedKecamatan === district.name ? 'active' : ''
+                          }`}
+                          key={code}
+                          type="button"
+                          aria-pressed={selectedKecamatan === district.name}
+                          onClick={() => updateFilterParam(
+                            'kecamatan',
+                            selectedKecamatan === district.name
+                              ? ''
+                              : normalizeIdentifier(district.name)
+                          )}
+                        >
+                          <span
+                            className="district-swatch"
+                            style={{ backgroundColor: district.color }}
+                            aria-hidden="true"
                           />
-                          <span className="layer-toggle" aria-hidden="true" />
-                        </label>
-                      );
-                    }) : (
-                      <p className="layer-empty">Belum ada data untuk bidang ini.</p>
-                    )}
+                          <span>{district.name}</span>
+                        </button>
+                      ))}
+                    </div>
                   </div>
                 </section>
-              )}
 
-              {/* MAP LEGEND */}
-              <div className={`map-legend district-legend ${
-                isLegendExpanded ? 'is-expanded' : ''
-              } ${isLegendCollapsed ? 'is-collapsed' : ''}`}>
-                <div className="district-legend-heading">
-                  <button
-                    type="button"
-                    className="legend-collapse-toggle"
-                    onClick={() => {
-                      setIsLegendExpanded((expanded) => !expanded);
-                      setIsLegendCollapsed((collapsed) => !collapsed);
-                    }}
-                    aria-expanded={!isLegendCollapsed}
-                    aria-controls="district-legend-list"
-                  >
-                    <span>Legenda Kecamatan</span>
-                    <ChevronDown size={16} aria-hidden="true" />
-                  </button>
-                  <button
-                    type="button"
-                    className="district-reset-button"
-                    onClick={() => updateFilterParam('kecamatan', '')}
-                    aria-label="Reset pilihan kecamatan dan tampilkan seluruh wilayah"
-                    title="Tampilkan semua kecamatan"
-                  >
-                    Reset / Semua Kecamatan
-                  </button>
-                </div>
-                <div id="district-legend-list" className="district-legend-list">
-                  {Object.entries(districts).map(([code, district]) => (
-                    <button
-                      className={`district-legend-item ${
-                        selectedKecamatan === district.name ? 'active' : ''
-                      }`}
-                      key={code}
-                      type="button"
-                      aria-pressed={selectedKecamatan === district.name}
-                      onClick={() => updateFilterParam(
-                        'kecamatan',
-                        selectedKecamatan === district.name
-                          ? ''
-                          : normalizeIdentifier(district.name)
+                <section className="layer-manager map-layer-manager" aria-labelledby="map-fields-title">
+                  <div className="layer-manager-heading">
+                    <div>
+                      <h3 id="map-fields-title">Data Bidang & Fasilitas</h3>
+                      <p>Tampilkan sebaran titik pada peta</p>
+                    </div>
+                  </div>
+                  <div className="map-field-list">
+                    {bidangMenus.map((bidang) => {
+                      const isVisible = visibleMapFields[bidang.id] !== false;
+                      const fieldLocationCount = yearFilteredLocations.filter((location) =>
+                        belongsToBidang(location, bidang.id)
+                      ).length;
+                      const fieldName = bidang.id === 'dayasos'
+                        ? 'Dayasos / LKS'
+                        : bidang.name.replace(/^Bidang /, '');
+
+                      return (
+                        <label className="map-field-item" key={bidang.id}>
+                          <span className="map-field-info">
+                            <span
+                              className="map-field-color"
+                              style={{ backgroundColor: bidang.color }}
+                              aria-hidden="true"
+                            />
+                            <span>{fieldName}</span>
+                            <span className="map-field-count">{fieldLocationCount}</span>
+                          </span>
+                          <input
+                            type="checkbox"
+                            checked={isVisible}
+                            onChange={(event) => setVisibleMapFields((current) => ({
+                              ...current,
+                              [bidang.id]: event.target.checked
+                            }))}
+                            aria-label={`${isVisible ? 'Sembunyikan' : 'Tampilkan'} layer ${fieldName}`}
+                          />
+                        </label>
+                      );
+                    })}
+                  </div>
+                </section>
+
+                {activeBidang && (
+                  <section className="layer-manager map-layer-manager map-category-manager" aria-labelledby="layer-manager-title">
+                    <div className="layer-manager-heading">
+                      <div>
+                        <h3 id="layer-manager-title">Subkategori {activeBidang.name}</h3>
+                        <p>Filter kategori data</p>
+                      </div>
+                      <span className="layer-count">{activeLayerCount}/{layerCategories.length}</span>
+                    </div>
+                    <div className="layer-list">
+                      {layerCategories.length > 0 ? layerCategories.map((category) => {
+                        const layerKey = `${activeMenu}:${normalizeIdentifier(category)}`;
+                        const isEnabled = enabledLayers[layerKey] !== false;
+                        return (
+                          <label className="layer-item" key={layerKey}>
+                            <span className="layer-item-info">
+                              <span
+                                className="layer-color"
+                                style={{ '--layer-color': activeBidang.color }}
+                                aria-hidden="true"
+                              />
+                              <span className="layer-item-copy">
+                                <span className="layer-name">{category}</span>
+                                <span className="layer-state">
+                                  {isEnabled ? 'Aktif' : 'Nonaktif'}
+                                </span>
+                              </span>
+                            </span>
+                            <input
+                              className="layer-toggle-input"
+                              type="checkbox"
+                              checked={isEnabled}
+                              onChange={() => setEnabledLayers((current) => ({
+                                ...current,
+                                [layerKey]: !isEnabled
+                              }))}
+                              aria-label={`${isEnabled ? 'Matikan' : 'Aktifkan'} layer ${category}`}
+                            />
+                            <span className="layer-toggle" aria-hidden="true" />
+                          </label>
+                        );
+                      }) : (
+                        <p className="layer-empty">Belum ada data untuk bidang ini.</p>
                       )}
-                    >
-                      <span
-                        className="district-swatch"
-                        style={{ backgroundColor: district.color }}
-                        aria-hidden="true"
-                      />
-                      <span>{district.name}</span>
-                    </button>
-                  ))}
-                </div>
-              </div>
+                    </div>
+                  </section>
+                )}
 
+                <div className="map-panel-status">
+                  <span className="status-indicator" />
+                  <span>Sistem Pemetaan Aktif</span>
+                </div>
+              </aside>
+
+              <div className="map-wrapper">
+                <MapContainer
+                  center={MAP_INITIAL_CENTER}
+                  zoom={MAP_INITIAL_ZOOM}
+                  minZoom={10}
+                  maxZoom={18}
+                  dragging={true}
+                  zoomControl={true}
+                  scrollWheelZoom={true}
+                  maxBounds={[[-9.15, 119.25], [-8.15, 120.55]]}
+                  maxBoundsViscosity={1.0}
+                  className="leaflet-map"
+                >
+                  <MapFlyToController
+                    searchSelection={searchSelection}
+                    tableSelection={tableSelection}
+                    markerRefs={markerRefs}
+                  />
+                  <MapDistrictController selectedKecamatan={selectedKecamatan} />
+                  <MapResizeController isFullscreen={isMapFullscreen} />
+                  <MapHomeControl />
+
+                  <LayersControl position="topright">
+                    <LayersControl.BaseLayer name="Peta Jalan">
+                      <TileLayer
+                        attribution='Tiles &copy; Esri — Sources: Esri, HERE, Garmin, USGS, Intermap, and the GIS User Community'
+                        url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}"
+                        maxZoom={19}
+                      />
+                    </LayersControl.BaseLayer>
+
+                    <LayersControl.BaseLayer checked name="Citra Satelit">
+                      <TileLayer
+                        attribution='&copy; Google'
+                        url="https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}"
+                        maxZoom={20}
+                      />
+                    </LayersControl.BaseLayer>
+
+                    <LayersControl.Overlay checked name="Jalan & Label">
+                      <TileLayer
+                        attribution='Overlay &copy; Esri — Sources: Esri, HERE, Garmin, and the GIS User Community'
+                        url="https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Transportation/MapServer/tile/{z}/{y}/{x}"
+                        maxZoom={19}
+                      />
+                    </LayersControl.Overlay>
+                  </LayersControl>
+
+                  <ScaleControl position="bottomright" metric imperial={false} />
+
+                  {isDistrictLayerVisible && (
+                    <>
+                      <GeoJSON
+                        data={maskGeoJSON}
+                        style={() => ({
+                          fillColor: '#f3f6fa',
+                          fillOpacity: 1,
+                          color: '#f3f6fa',
+                          weight: 0,
+                          opacity: 0
+                        })}
+                      />
+                      <GeoJSON
+                        data={villageGeoJSON}
+                        style={(feature) => styleFeature(feature, selectedKecamatan)}
+                        onEachFeature={onEachVillage}
+                      />
+                    </>
+                  )}
+
+                  <MarkerClusterGroup
+                    chunkedLoading
+                    maxClusterRadius={60}
+                    disableClusteringAtZoom={15}
+                    showCoverageOnHover={false}
+                  >
+                    {renderCsvMarkers()}
+                  </MarkerClusterGroup>
+                </MapContainer>
+              </div>
             </div>
 
           </div>
@@ -1759,21 +1871,30 @@ function App() {
             </table>
           </section>
 
-          {/* FOOTER */}
-          <div className="footer-info">
-            <Info size={16} />
+          <footer className="site-footer">
+            <div className="site-footer-grid">
+              <section className="site-footer-column" aria-labelledby="footer-about-title">
+                <h2 id="footer-about-title">PIN DINSOSP3A</h2>
+                <p>
+                  Sistem informasi untuk membantu mengenali sebaran layanan serta kegiatan
+                  dari DINSOSP3A di Kabupaten Manggarai Barat.
+                </p>
+              </section>
 
-            <span>
-              Peta menampilkan data batas administrasi dari 12 file GeoJSON.
-              Warna poligon menunjukkan kecamatan berdasarkan kode wilayah.
-              {' '}
-              {isLoadingLocations
-                ? 'Memuat lokasi dari LocalStorage...'
-                : mapDataError
-                  ? `Gagal memuat lokasi: ${mapDataError}`
-                  : `${mapLocations.length} lokasi dimuat dari localStorage browser.`}
-            </span>
-          </div>
+              <section className="site-footer-column" aria-labelledby="footer-contact-title">
+                <h2 id="footer-contact-title">Alamat Kantor</h2>
+                <h3>Kantor</h3>
+                <address>
+                  Jln. Daniel Daeng Nabit Labuan Bajo, Kode Pos 86554, Kabupaten
+                  Manggarai Barat, Nusa Tenggara Timur.
+                </address>
+              </section>
+            </div>
+            <div className="site-footer-copyright">
+              © 2026 Dinas Sosial, Pemberdayaan Perempuan dan Perlindungan Anak
+              Kabupaten Manggarai Barat.
+            </div>
+          </footer>
 
         </section>
 
