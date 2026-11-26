@@ -33,6 +33,20 @@ import {
   X
 } from 'lucide-react';
 
+import {
+  Bar,
+  BarChart,
+  CartesianGrid,
+  Cell,
+  LabelList,
+  Pie,
+  PieChart,
+  ResponsiveContainer,
+  Tooltip as RechartsTooltip,
+  XAxis,
+  YAxis
+} from 'recharts';
+
 import Papa from 'papaparse';
 import 'leaflet/dist/leaflet.css';
 import 'react-leaflet-cluster/dist/assets/MarkerCluster.css';
@@ -176,6 +190,80 @@ function getFirstLocationField(location, ...fieldNames) {
   return fieldNames
     .map((fieldName) => getLocationField(location, fieldName))
     .find((value) => value !== '—') ?? '—';
+}
+
+function getAreaFromLocationName(locationName, level) {
+  const keywords = level === 'kecamatan'
+    ? 'kecamatan|kec\\.?'
+    : 'desa|kelurahan|kel\\.?';
+  const nextAreaKeywords = level === 'kecamatan'
+    ? 'desa|kelurahan|kel\\.?'
+    : 'kecamatan|kec\\.?';
+  const match = String(locationName ?? '').match(
+    new RegExp(`(?:^|[\\s,])(?:${keywords})\\s*[:\\-]?\\s*(.+?)(?=\\s+(?:${nextAreaKeywords})\\b|[,;/|]|$)`, 'i')
+  );
+  return match?.[1]?.trim().replace(/[.)\s]+$/, '') || null;
+}
+
+function isPointInRing(point, ring) {
+  const [longitude, latitude] = point;
+  let isInside = false;
+
+  for (let index = 0, previousIndex = ring.length - 1; index < ring.length; previousIndex = index++) {
+    const [x1, y1] = ring[index];
+    const [x2, y2] = ring[previousIndex];
+    const crossProduct = (latitude - y1) * (x2 - x1) - (longitude - x1) * (y2 - y1);
+    const isOnSegment = Math.abs(crossProduct) < 1e-10 &&
+      longitude >= Math.min(x1, x2) &&
+      longitude <= Math.max(x1, x2) &&
+      latitude >= Math.min(y1, y2) &&
+      latitude <= Math.max(y1, y2);
+
+    if (isOnSegment) {
+      return true;
+    }
+
+    if ((y1 > latitude) !== (y2 > latitude) &&
+      longitude < ((x2 - x1) * (latitude - y1)) / (y2 - y1) + x1) {
+      isInside = !isInside;
+    }
+  }
+
+  return isInside;
+}
+
+function isPointInPolygon(point, polygon) {
+  const [outerRing, ...holes] = polygon;
+  return isPointInRing(point, outerRing) &&
+    !holes.some((hole) => isPointInRing(point, hole));
+}
+
+function getAreaFromCoordinates(location, level) {
+  const latitude = Number(location.latitude);
+  const longitude = Number(location.longitude);
+  if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
+    return null;
+  }
+
+  const feature = allFeatures.find(({ geometry }) => {
+    if (geometry.type === 'Polygon') {
+      return isPointInPolygon([longitude, latitude], geometry.coordinates);
+    }
+    if (geometry.type === 'MultiPolygon') {
+      return geometry.coordinates.some((polygon) =>
+        isPointInPolygon([longitude, latitude], polygon)
+      );
+    }
+    return false;
+  });
+
+  if (!feature) {
+    return null;
+  }
+
+  return level === 'desa'
+    ? feature.properties.name
+    : districts[feature.properties.parent_code]?.name ?? null;
 }
 
 function getLocationStatus(location) {
@@ -339,6 +427,21 @@ function getLocationSearchText(location) {
     .toLocaleLowerCase('id');
 }
 
+function ChartTooltip({ active, payload }) {
+  if (!active || !payload?.length) {
+    return null;
+  }
+
+  const { label, count, percentage } = payload[0].payload;
+  return (
+    <div className="chart-tooltip">
+      <p>{label}</p>
+      <strong>{count} lokasi</strong>
+      <span>{percentage}</span>
+    </div>
+  );
+}
+
 function MapFlyToController({ searchSelection, tableSelection, markerRefs }) {
   const map = useMap();
 
@@ -495,6 +598,7 @@ function App() {
   const [isSearchResultsOpen, setIsSearchResultsOpen] = useState(false);
   const [searchSelection, setSearchSelection] = useState(null);
   const [mapLocations, setMapLocations] = useState([]);
+  const [chartAreaLevel, setChartAreaLevel] = useState('kecamatan');
   const [isLoadingLocations, setIsLoadingLocations] = useState(true);
   const [mapDataError, setMapDataError] = useState('');
   const [enabledLayers, setEnabledLayers] = useState({});
@@ -520,6 +624,47 @@ function App() {
     : mapLocations.filter((location) =>
         String(location.tahun_kegiatan ?? '').trim() === selectedYear
       );
+  const chartLocations = searchQuery.trim()
+    ? yearFilteredLocations.filter((location) =>
+        getLocationSearchText(location).includes(searchQuery.trim().toLocaleLowerCase('id'))
+      )
+    : yearFilteredLocations;
+  const activityChartData = bidangMenus.map((bidang) => {
+    const count = chartLocations.filter((location) =>
+      belongsToBidang(location, bidang.id)
+    ).length;
+    return {
+      label: bidang.name.replace(/^Bidang /, ''),
+      count,
+      percentage: formatPercentage(count, chartLocations.length),
+      color: bidang.color
+    };
+  });
+  const areaCounts = chartLocations.reduce((counts, location) => {
+    const level = chartAreaLevel;
+    const areaName = getFirstLocationField(
+      location,
+      ...(level === 'kecamatan'
+        ? ['nama_kecamatan', 'kecamatan']
+        : ['nama_desa', 'desa', 'kelurahan'])
+    );
+    const label = areaName !== '—'
+      ? areaName
+      : getAreaFromLocationName(location.nama_lokasi, level) ??
+        getAreaFromCoordinates(location, level);
+    if (label) {
+      counts.set(label, (counts.get(label) ?? 0) + 1);
+    }
+    return counts;
+  }, new Map());
+  const topAreas = [...areaCounts.entries()]
+    .map(([label, count]) => ({
+      label,
+      count,
+      percentage: formatPercentage(count, chartLocations.length)
+    }))
+    .sort((left, right) => right.count - left.count || left.label.localeCompare(right.label, 'id'))
+    .slice(0, 5);
   const searchResults = searchQuery.trim()
     ? yearFilteredLocations.filter((location) => {
         const latitude = Number(location.latitude);
@@ -1045,62 +1190,129 @@ function App() {
 
           </div>
 
-          {/* VISUAL PERCENTAGE CARDS */}
-          <section className="percentage-summary tw-mb-6" aria-labelledby="percentage-cards-title">
-            <div className="tw-mb-3">
-              <h3 id="percentage-cards-title" className="tw-text-sm tw-font-semibold tw-text-slate-200">
-                {activeBidang ? `Rincian ${activeBidang.name}` : 'Persentase Data per Bidang'}
-              </h3>
-              <p className="tw-mt-1 tw-text-xs tw-text-slate-400">
-                {activeBidang
-                  ? `Proporsi kategori dari ${bidangLocations.length} lokasi ${activeBidang.name}.`
-                  : `Proporsi setiap bidang dari ${yearFilteredLocations.length} lokasi terdata.`}
-              </p>
-            </div>
-            {percentageCards.length > 0 ? (
-              <div className="tw-grid tw-grid-cols-2 tw-gap-2 md:tw-grid-cols-3 md:tw-gap-4 lg:tw-grid-cols-6">
-                {percentageCards.map((card) => (
-                  <article
-                    className="tw-rounded-xl tw-border tw-border-slate-700 tw-bg-slate-800/90 tw-p-3 md:tw-p-4"
-                    key={card.key}
-                    style={{ borderTopWidth: 3, borderTopColor: card.color }}
-                  >
-                    <h4 className="tw-truncate tw-text-xs tw-font-medium tw-text-slate-300">
-                      {card.label}
-                    </h4>
-                    <p
-                      className="tw-mt-3 tw-text-2xl tw-font-bold tw-tracking-tight md:tw-text-3xl"
-                      style={{ color: card.color }}
-                    >
-                      {card.percentage}
-                    </p>
-                    <p className="tw-mt-1 tw-text-xs tw-text-slate-400">
-                      {card.count} Lokasi
-                    </p>
-                    <div
-                      className="tw-mt-4 tw-h-1.5 tw-overflow-hidden tw-rounded-full tw-bg-slate-700"
-                      role="progressbar"
-                      aria-label={`Persentase ${card.label}`}
-                      aria-valuemin={0}
-                      aria-valuemax={100}
-                      aria-valuenow={Number.parseFloat(card.percentage) || 0}
-                    >
-                      <div
-                        className="tw-h-full tw-rounded-full tw-transition-all"
-                        style={{
-                          width: card.percentage,
-                          backgroundColor: card.color
-                        }}
-                      />
-                    </div>
-                  </article>
-                ))}
+          {/* INTERACTIVE CHARTS */}
+          <section className="chart-grid" aria-label="Visualisasi data lokasi">
+            <article className="chart-card" aria-labelledby="activity-chart-title">
+              <div className="chart-card-header">
+                <div>
+                  <h3 id="activity-chart-title">Persentase Kegiatan per Bidang</h3>
+                  <p>Proporsi dari {chartLocations.length} lokasi terfilter</p>
+                </div>
               </div>
-            ) : (
-              <p className="tw-rounded-xl tw-border tw-border-slate-700 tw-bg-slate-800/90 tw-p-4 tw-text-sm tw-text-slate-400">
-                Belum ada rincian kategori untuk bidang ini.
-              </p>
-            )}
+              <div className="activity-chart">
+                <ResponsiveContainer width="100%" height="100%">
+                  <PieChart>
+                    <Pie
+                      data={activityChartData}
+                      dataKey="count"
+                      nameKey="label"
+                      innerRadius={66}
+                      outerRadius={94}
+                      paddingAngle={activityChartData.some(({ count }) => count > 0) ? 3 : 0}
+                      stroke="none"
+                    >
+                      {activityChartData.map((entry) => (
+                        <Cell key={entry.label} fill={entry.color} />
+                      ))}
+                    </Pie>
+                    <RechartsTooltip content={<ChartTooltip />} />
+                  </PieChart>
+                </ResponsiveContainer>
+                <div className="donut-total" aria-label={`Total ${chartLocations.length} lokasi`}>
+                  <strong>{chartLocations.length}</strong>
+                  <span>Total Lokasi</span>
+                </div>
+              </div>
+              <ul className="chart-legend">
+                {activityChartData.map((entry) => (
+                  <li key={entry.label}>
+                    <span className="chart-legend-marker" style={{ backgroundColor: entry.color }} />
+                    <span className="chart-legend-label">{entry.label}</span>
+                    <span className="chart-legend-value">
+                      {entry.count} <span>({entry.percentage})</span>
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </article>
+
+            <article className="chart-card" aria-labelledby="area-chart-title">
+              <div className="chart-card-header">
+                <div>
+                  <h3 id="area-chart-title">Sebaran Titik Kegiatan Terbanyak</h3>
+                  <p>Top 5 wilayah dari {chartLocations.length} lokasi terfilter</p>
+                </div>
+                <div className="chart-tabs" role="group" aria-label="Kelompok wilayah">
+                  <button
+                    type="button"
+                    className={chartAreaLevel === 'kecamatan' ? 'active' : ''}
+                    aria-pressed={chartAreaLevel === 'kecamatan'}
+                    onClick={() => setChartAreaLevel('kecamatan')}
+                  >
+                    Per Kecamatan
+                  </button>
+                  <button
+                    type="button"
+                    className={chartAreaLevel === 'desa' ? 'active' : ''}
+                    aria-pressed={chartAreaLevel === 'desa'}
+                    onClick={() => setChartAreaLevel('desa')}
+                  >
+                    Per Desa
+                  </button>
+                </div>
+              </div>
+              {topAreas.length > 0 ? (
+                <div className="area-chart">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart
+                      data={topAreas}
+                      layout="vertical"
+                      margin={{ top: 5, right: 68, bottom: 5, left: 5 }}
+                    >
+                      <CartesianGrid stroke="#2b4056" horizontal={false} />
+                      <XAxis
+                        type="number"
+                        allowDecimals={false}
+                        axisLine={false}
+                        tickLine={false}
+                        tick={{ fill: '#94a9bd', fontSize: 11 }}
+                      />
+                      <YAxis
+                        type="category"
+                        dataKey="label"
+                        width={112}
+                        axisLine={false}
+                        tickLine={false}
+                        tick={{ fill: '#d8e3ee', fontSize: 11 }}
+                      />
+                      <RechartsTooltip content={<ChartTooltip />} cursor={{ fill: '#ffffff0a' }} />
+                      <Bar dataKey="count" fill="#38bdf8" radius={[0, 5, 5, 0]} barSize={22}>
+                        <LabelList
+                          dataKey="count"
+                          position="right"
+                          content={({ x, y, width, height, value, index }) => {
+                            const percentage = topAreas[index]?.percentage;
+                            return (
+                              <text
+                                x={Number(x) + Number(width) + 6}
+                                y={Number(y) + Number(height) / 2}
+                                fill="#c6d5e3"
+                                fontSize={10}
+                                dominantBaseline="middle"
+                              >
+                                {value} · {percentage}
+                              </text>
+                            );
+                          }}
+                        />
+                      </Bar>
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              ) : (
+                <div className="chart-empty">Belum ada data wilayah untuk filter yang dipilih.</div>
+              )}
+            </article>
           </section>
 
           {/* MAP CARD */}
